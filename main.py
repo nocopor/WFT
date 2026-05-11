@@ -1,175 +1,130 @@
 import os
 import asyncio
-import sqlite3
+import json
 import logging
+import httpx
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 
-# --- КОНФИГУРАЦИЯ ---
+# --- НАСТРОЙКИ ---
 TOKEN = os.getenv("BOT_TOKEN")
+GIST_ID = os.getenv("GIST_ID")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-class SetupFilter(StatesGroup):
-    waiting_for_date = State()
+class FilterStates(StatesGroup):
+    add_name = State()
+    add_model = State()
+    add_interval = State()
 
-DB_PATH = "filters.db"
+# --- РАБОТА С GITHUB GIST ---
+async def load_db():
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.get(url, headers=headers)
+            content = r.json()['files']['filters_data.json']['content']
+            return json.loads(content)
+        except Exception as e:
+            logging.error(f"Ошибка загрузки: {e}")
+            return {}
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ---
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute('''CREATE TABLE IF NOT EXISTS filters (
-        id INTEGER PRIMARY KEY, 
-        name TEXT, 
-        model TEXT, 
-        interval_m INTEGER,
-        snooze_until TEXT
-    )''')
-    cur.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, filter_id INTEGER, date TEXT)')
-    
-    # Твои точные данные
-    my_filters = [
-        (1, "WC: Холодная", "МП-5В", 3, None),
-        (2, "WC: Горячая", "МП-5ВГ", 3, None),
-        (3, "Осмос: 1-Префильтр", "МП-1В", 6, None),
-        (4, "Осмос: 2-Угольный", "Gac-10", 6, None),
-        (5, "Осмос: 3-Префильтр", "МП-5В", 6, None),
-        (6, "Осмос: Мембрана", "TW-40-1812-75", 24, None),
-        (7, "Осмос: Минерализатор", "GS-10cal", 12, None)
-    ]
-    cur.executemany("INSERT OR IGNORE INTO filters VALUES (?,?,?,?,?)", my_filters)
-    conn.commit()
-    conn.close()
+async def save_db(data):
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    payload = {"files": {"filters_data.json": {"content": json.dumps(data, indent=2)}}}
+    async with httpx.AsyncClient() as client:
+        await client.patch(url, headers=headers, json=payload)
 
-# --- КЛАВИАТУРЫ ---
+# --- КЛАВИАТУРА ---
 def main_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 Статус фильтров")],
-            [KeyboardButton(text="⚙️ Внести старую замену")]
-        ], resize_keyboard=True
-    )
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="📊 Мои фильтры")],
+        [KeyboardButton(text="➕ Добавить фильтр")]
+    ], resize_keyboard=True)
 
-def filter_action_kb(fid):
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="✅ Заменил сегодня", callback_data=f"rep_{fid}"))
-    builder.row(InlineKeyboardButton(text="⏳ Отложить", callback_data=f"sn_menu_{fid}"))
-    return builder.as_markup()
-
-# --- ЛОГИКА СРОКОВ ---
-def get_status_text():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT f.id, f.name, f.model, f.interval_m, f.snooze_until, MAX(h.date) FROM filters f LEFT JOIN history h ON f.id = h.filter_id GROUP BY f.id")
-    rows = cur.fetchall()
-    conn.close()
-    
-    res = "🚰 **СОСТОЯНИЕ ВАШЕЙ СИСТЕМЫ**\n" + "—" * 15 + "\n\n"
-    now = datetime.now()
-
-    for fid, name, model, interval, snooze, last_date in rows:
-        if last_date:
-            last = datetime.strptime(last_date, "%Y-%m-%d")
-            base_next = last + timedelta(days=interval * 30)
-            
-            # Проверка на "отложенность"
-            target_date = base_next
-            if snooze:
-                snooze_dt = datetime.strptime(snooze, "%Y-%m-%d")
-                if snooze_dt > base_next:
-                    target_date = snooze_dt
-
-            days_left = (target_date - now).days
-            
-            if days_left > 15: icon = "🟢"
-            elif 0 <= days_left <= 15: icon = "🟡"
-            else: icon = "🔴"
-
-            res += f"{icon} **{name}**\n`[{model}]`\n└ До: {target_date.strftime('%d.%m.%Y')} ({days_left} дн.)\n\n"
-        else:
-            res += f"⚪️ **{name}**\n`[{model}]`\n└ ⚠️ Нет данных! Нажмите кнопку ниже.\n\n"
-    return res
-
-# --- ХЭНДЛЕРЫ ---
+# --- ОБРАБОТЧИКИ ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    init_db()
-    await message.answer("🔧 **Бот-диспетчер фильтров запущен.**\n\nИспользуйте кнопки для контроля замен.", reply_markup=main_kb(), parse_mode="Markdown")
+    await message.answer(
+        "🚰 **Бот-трекер фильтров готов!**\n\nТеперь все твои данные хранятся в GitHub Gist. Даже если сервер перезагрузится, ничего не сотрется.",
+        reply_markup=main_kb(), parse_mode="Markdown"
+    )
 
-@dp.message(F.text == "📊 Статус фильтров")
-async def cmd_status(message: types.Message):
-    await message.answer(get_status_text(), parse_mode="Markdown")
+@dp.message(F.text == "➕ Добавить фильтр")
+async def add_start(message: types.Message, state: FSMContext):
+    await state.set_state(FilterStates.add_name)
+    await message.answer("Введите название (например: Осмос 1-ступень):")
 
-@dp.message(F.text == "⚙️ Внести старую замену")
-async def cmd_old_date(message: types.Message):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, name FROM filters")
-    filters = cur.fetchall()
-    conn.close()
-    builder = InlineKeyboardBuilder()
-    for fid, name in filters:
-        builder.row(InlineKeyboardButton(text=name, callback_data=f"setdate_{fid}"))
-    await message.answer("Для какого фильтра указать дату?", reply_markup=builder.as_markup())
+@dp.message(FilterStates.add_name)
+async def add_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await state.set_state(FilterStates.add_model)
+    await message.answer("Введите модель (например: МП-5В):")
 
-@dp.callback_query(F.data.startswith("setdate_"))
-async def process_sd(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(fid=callback.data.split("_")[1])
-    await state.set_state(SetupFilter.waiting_for_date)
-    await callback.message.answer("Напиши дату замены в формате ДД.ММ.ГГГГ (например: 10.01.2024)")
-    await callback.answer()
+@dp.message(FilterStates.add_model)
+async def add_model(message: types.Message, state: FSMContext):
+    await state.update_data(model=message.text)
+    await state.set_state(FilterStates.add_interval)
+    await message.answer("Срок замены в месяцах (число):")
 
-@dp.message(SetupFilter.waiting_for_date)
-async def process_date_input(message: types.Message, state: FSMContext):
-    try:
-        data = await state.get_data()
-        dt = datetime.strptime(message.text, "%d.%m.%Y").strftime("%Y-%m-%d")
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("INSERT INTO history (filter_id, date) VALUES (?, ?)", (data['fid'], dt))
-        cur.execute("UPDATE filters SET snooze_until = NULL WHERE id = ?", (data['fid'],))
-        conn.commit()
-        conn.close()
-        await message.answer("✅ Дата успешно сохранена!", reply_markup=main_kb())
-        await state.clear()
-    except:
-        await message.answer("❌ Ошибка в дате. Нужно ДД.ММ.ГГГГ")
+@dp.message(FilterStates.add_interval)
+async def add_interval(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("Пожалуйста, введите только число.")
+    
+    data = await state.get_data()
+    uid = str(message.from_user.id)
+    
+    db = await load_db()
+    if uid not in db: db[uid] = []
+    
+    db[uid].append({
+        "name": data['name'],
+        "model": data['model'],
+        "interval": int(message.text),
+        "last_date": datetime.now().strftime("%Y-%m-%d")
+    })
+    
+    await save_db(db)
+    await message.answer(f"✅ Фильтр '{data['name']}' добавлен и сохранен в облако!", reply_markup=main_kb())
+    await state.clear()
 
-@dp.callback_query(F.data.startswith("sn_menu_"))
-async def snooze_menu(callback: types.CallbackQuery):
-    fid = callback.data.split("_")[3]
-    builder = InlineKeyboardBuilder()
-    for d in [1, 3, 7]:
-        builder.add(InlineKeyboardButton(text=f"+{d} дн.", callback_data=f"sn_apply_{fid}_{d}"))
-    await callback.message.edit_text("На сколько отложить напоминание?", reply_markup=builder.as_markup())
+@dp.message(F.text == "📊 Мои фильтры")
+async def show_status(message: types.Message):
+    db = await load_db()
+    uid = str(message.from_user.id)
+    user_filters = db.get(uid, [])
+    
+    if not user_filters:
+        return await message.answer("У вас пока нет фильтров.")
 
-@dp.callback_query(F.data.startswith("sn_apply_"))
-async def snooze_apply(callback: types.CallbackQuery):
-    _, _, fid, days = callback.data.split("_")
-    new_date = (datetime.now() + timedelta(days=int(days))).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("UPDATE filters SET snooze_until = ? WHERE id = ?", (new_date, fid))
-    conn.commit()
-    conn.close()
-    await callback.message.edit_text(f"⏳ Отложено до {new_date}")
-    await callback.answer()
+    res = "📋 **Ваши фильтры:**\n\n"
+    for f in user_filters:
+        last_dt = datetime.strptime(f["last_date"], "%Y-%m-%d")
+        next_dt = last_dt + timedelta(days=f["interval"] * 30)
+        days_left = (next_dt - datetime.now()).days
+        
+        icon = "🟢" if days_left > 15 else "🟡" if days_left > 0 else "🔴"
+        res += f"{icon} **{f['name']}** ({f['model']})\n└ Замена через: {days_left} дн.\n\n"
+    
+    await message.answer(res, parse_mode="Markdown")
 
-# --- СЕРВЕР ---
+# --- СЕРВЕР ДЛЯ RENDER ---
 async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
-    init_db()
     app = web.Application()
     app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app)
