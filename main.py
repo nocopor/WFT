@@ -4,7 +4,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 
 # --- НАСТРОЙКИ ---
@@ -17,16 +18,9 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- СПИСКИ ПОДСКАЗОК ---
+# --- ПОДСКАЗКИ ---
 ROOMS = ["Кухня", "Ванна", "Туалет", "Котельная"]
-FILTER_TYPES = [
-    "Полипропилен (механика)", 
-    "Угольный картридж (GAC/CBC)", 
-    "Осмос (Мембрана)", 
-    "Постфильтр", 
-    "Минерализатор",
-    "Магистральный фильтр"
-]
+FILTER_TYPES = ["Полипропилен", "Угольный", "Осмос", "Постфильтр", "Минерализатор"]
 INTERVALS = ["3 месяца", "6 месяцев", "12 месяцев"]
 
 class FilterStates(StatesGroup):
@@ -57,108 +51,158 @@ async def save_db(data):
         await client.patch(url, headers=headers, json=payload)
 
 # --- КЛАВИАТУРЫ ---
-def make_row_keyboard(items: list):
-    row = [KeyboardButton(text=item) for item in items]
-    return ReplyKeyboardMarkup(keyboard=[row], resize_keyboard=True)
-
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="📊 Статус")], [KeyboardButton(text="➕ Добавить фильтр")]
+        [KeyboardButton(text="📊 Статус")], 
+        [KeyboardButton(text="➕ Добавить фильтр"), KeyboardButton(text="🗑 Управление")]
     ], resize_keyboard=True)
 
-# --- ЛОГИКА ДОБАВЛЕНИЯ ---
+def make_row_kb(items: list):
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=i) for i in items]], resize_keyboard=True)
+
+# --- ДОБАВЛЕНИЕ ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    await message.answer("🏠 Бот-трекер фильтров готов к работе!", reply_markup=main_kb())
+    await message.answer("🏠 Бот-трекер запущен!", reply_markup=main_kb())
 
 @dp.message(F.text == "➕ Добавить фильтр")
 async def add_f(message: types.Message, state: FSMContext):
     await state.set_state(FilterStates.add_address)
-    await message.answer("Введите название дома/адрес (например: Квартира или Дача):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Назовите объект (Дом/Квартира):", reply_markup=ReplyKeyboardRemove())
 
 @dp.message(FilterStates.add_address)
 async def add_addr(message: types.Message, state: FSMContext):
     await state.update_data(address=message.text)
     await state.set_state(FilterStates.add_room)
-    await message.answer("Выберите или введите комнату:", reply_markup=make_row_keyboard(ROOMS))
+    await message.answer("Выберите комнату:", reply_markup=make_row_kb(ROOMS))
 
 @dp.message(FilterStates.add_room)
-async def add_room(message: types.Message, state: FSMContext):
+async def add_r(message: types.Message, state: FSMContext):
     await state.update_data(room=message.text)
     await state.set_state(FilterStates.add_name)
-    await message.answer("Выберите или введите тип фильтра:", reply_markup=make_row_keyboard(FILTER_TYPES))
+    await message.answer("Тип фильтра:", reply_markup=make_row_kb(FILTER_TYPES))
 
 @dp.message(FilterStates.add_name)
-async def add_name(message: types.Message, state: FSMContext):
+async def add_n(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(FilterStates.add_interval)
-    await message.answer("Срок службы:", reply_markup=make_row_keyboard(INTERVALS))
+    await message.answer("Срок службы:", reply_markup=make_row_kb(INTERVALS))
 
 @dp.message(FilterStates.add_interval)
-async def add_interval(message: types.Message, state: FSMContext):
-    val = message.text.split()[0] # Берем только число из "6 месяцев"
-    if not val.isdigit(): return await message.answer("Введите число месяцев.")
+async def add_i(message: types.Message, state: FSMContext):
+    val = "".join(filter(str.isdigit, message.text))
     await state.update_data(interval=int(val))
     await state.set_state(FilterStates.add_date)
-    await message.answer("Дата последней замены? (ДД.ММ.ГГГГ или 'сегодня'):", reply_markup=make_row_keyboard(["Сегодня"]))
+    await message.answer("Дата замены (ДД.ММ.ГГГГ или сегодня):", reply_markup=make_row_kb(["Сегодня"]))
 
 @dp.message(FilterStates.add_date)
-async def add_date(message: types.Message, state: FSMContext):
-    text = message.text.lower()
-    clean_date = datetime.now().strftime("%Y-%m-%d") if text == "сегодня" else None
-    if not clean_date:
-        try: clean_date = datetime.strptime(text, "%d.%m.%Y").strftime("%Y-%m-%d")
-        except: return await message.answer("Формат: ДД.ММ.ГГГГ")
-
+async def add_d(message: types.Message, state: FSMContext):
+    txt = message.text.lower()
+    c_date = datetime.now().strftime("%Y-%m-%d") if txt == "сегодня" else None
+    if not c_date:
+        try: c_date = datetime.strptime(txt, "%d.%m.%Y").strftime("%Y-%m-%d")
+        except: return await message.answer("Ошибка формата!")
+    
     data = await state.get_data()
     uid = str(message.from_user.id)
     db = await load_db()
-    
     if uid not in db: db[uid] = []
-    db[uid].append({
-        "address": data['address'],
-        "room": data['room'],
-        "name": data['name'],
-        "interval": data['interval'],
-        "last_date": clean_date
-    })
-    
+    db[uid].append({**data, "last_date": c_date})
     await save_db(db)
-    await message.answer(f"✅ Сохранено: {data['address']} -> {data['room']} -> {data['name']}", reply_markup=main_kb())
+    await message.answer("✅ Сохранено!", reply_markup=main_kb())
     await state.clear()
+
+# --- УПРАВЛЕНИЕ / УДАЛЕНИЕ ---
+@dp.message(F.text == "🗑 Управление")
+async def manage_menu(message: types.Message):
+    db = await load_db()
+    user_filters = db.get(str(message.from_user.id), [])
+    if not user_filters: return await message.answer("Нечего удалять.")
+    
+    addresses = list(set(f['address'] for f in user_filters))
+    kb = InlineKeyboardBuilder()
+    for addr in addresses:
+        kb.row(InlineKeyboardButton(text=f"🏠 {addr}", callback_data=f"del_addr:{addr}"))
+    
+    await message.answer("Выберите объект для управления:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("del_addr:"))
+async def manage_addr(callback: CallbackQuery):
+    addr = callback.data.split(":")[1]
+    db = await load_db()
+    user_filters = db.get(str(callback.from_user.id), [])
+    rooms = list(set(f['room'] for f in user_filters if f['address'] == addr))
+    
+    kb = InlineKeyboardBuilder()
+    for rm in rooms:
+        kb.row(InlineKeyboardButton(text=f"📍 {rm}", callback_data=f"del_room:{addr}:{rm}"))
+    kb.row(InlineKeyboardButton(text="❌ УДАЛИТЬ ВЕСЬ ДОМ", callback_data=f"confirm_del_addr:{addr}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_manage"))
+    
+    await callback.message.edit_text(f"Объект: {addr}\nВыберите комнату или удалите всё:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("del_room:"))
+async def manage_room(callback: CallbackQuery):
+    _, addr, rm = callback.data.split(":")
+    db = await load_db()
+    user_filters = db.get(str(callback.from_user.id), [])
+    filters = [f for f in user_filters if f['address'] == addr and f['room'] == rm]
+    
+    kb = InlineKeyboardBuilder()
+    for i, f in enumerate(user_filters):
+        if f['address'] == addr and f['room'] == rm:
+            kb.row(InlineKeyboardButton(text=f"🗑 {f['name']}", callback_data=f"confirm_del_filt:{i}"))
+    
+    kb.row(InlineKeyboardButton(text="❌ УДАЛИТЬ ВСЮ КОМНАТУ", callback_data=f"confirm_del_room:{addr}:{rm}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"del_addr:{addr}"))
+    
+    await callback.message.edit_text(f"Комната: {rm} ({addr})\nВыберите фильтр для удаления:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("confirm_del_"))
+async def execute_delete(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    mode = parts[0]
+    uid = str(callback.from_user.id)
+    db = await load_db()
+    
+    if mode == "confirm_del_addr":
+        db[uid] = [f for f in db[uid] if f['address'] != parts[1]]
+    elif mode == "confirm_del_room":
+        db[uid] = [f for f in db[uid] if not (f['address'] == parts[1] and f['room'] == parts[2])]
+    elif mode == "confirm_del_filt":
+        db[uid].pop(int(parts[1]))
+        
+    await save_db(db)
+    await callback.answer("Удалено!")
+    await callback.message.edit_text("✅ Изменения сохранены в облаке.")
+
+@dp.callback_query(F.data == "back_to_manage")
+async def back_to_manage(callback: CallbackQuery):
+    await manage_menu(callback.message)
 
 # --- СТАТУС ---
 @dp.message(F.text == "📊 Статус")
-async def show(message: types.Message):
+async def show_status(message: types.Message):
     db = await load_db()
     filters = db.get(str(message.from_user.id), [])
     if not filters: return await message.answer("Список пуст.")
     
-    # Сортируем для красоты
     filters.sort(key=lambda x: (x.get('address', ''), x.get('room', '')))
-    
-    res = "📋 **Ваши фильтры:**\n"
-    current_addr = ""
-    current_room = ""
-    
+    res = "📋 **Статус фильтров:**\n"
+    c_addr, c_room = "", ""
     for f in filters:
-        addr = f.get('address', 'Без адреса')
-        room = f.get('room', 'Общее')
+        if f['address'] != c_addr:
+            res += f"\n🏰 **{f['address']}**"
+            c_addr = f['address']
+        if f['room'] != c_room:
+            res += f"\n 📍 __{f['room']}__"
+            c_room = f['room']
         
-        if addr != current_addr:
-            res += f"\n🏰 **{addr}**"
-            current_addr = addr
-        if room != current_room:
-            res += f"\n 📍 __{room}__"
-            current_room = room
-            
         last = datetime.strptime(f['last_date'], "%Y-%m-%d")
         next_d = last + timedelta(days=f['interval']*30)
         days = (next_d - datetime.now()).days
         icon = "🟢" if days > 15 else "🟡" if days > 0 else "🔴"
-        
         res += f"\n  {icon} {f['name']}: {days} дн."
-    
     await message.answer(res, parse_mode="Markdown")
 
 async def handle_hc(request): return web.Response(text="OK")
