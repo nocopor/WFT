@@ -1,18 +1,12 @@
-import os
-import asyncio
-import json
-import logging
-import httpx
+import os, asyncio, json, logging, httpx
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiohttp import web
 
-# --- НАСТРОЙКИ ---
 TOKEN = os.getenv("BOT_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -24,20 +18,20 @@ dp = Dispatcher()
 
 class FilterStates(StatesGroup):
     add_name = State()
-    add_model = State()
     add_interval = State()
+    add_date = State()
 
-# --- РАБОТА С GITHUB GIST ---
 async def load_db():
     url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     async with httpx.AsyncClient() as client:
         try:
             r = await client.get(url, headers=headers)
+            # Берем содержимое файла filters_data.json
             content = r.json()['files']['filters_data.json']['content']
             return json.loads(content)
         except Exception as e:
-            logging.error(f"Ошибка загрузки: {e}")
+            logging.error(f"Ошибка Gist: {e}")
             return {}
 
 async def save_db(data):
@@ -47,43 +41,44 @@ async def save_db(data):
     async with httpx.AsyncClient() as client:
         await client.patch(url, headers=headers, json=payload)
 
-# --- КЛАВИАТУРА ---
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="📊 Мои фильтры")],
-        [KeyboardButton(text="➕ Добавить фильтр")]
+        [KeyboardButton(text="📊 Статус")], [KeyboardButton(text="➕ Добавить фильтр")]
     ], resize_keyboard=True)
 
-# --- ОБРАБОТЧИКИ ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    await message.answer(
-        "🚰 **Бот-трекер фильтров готов!**\n\nТеперь все твои данные хранятся в GitHub Gist. Даже если сервер перезагрузится, ничего не сотрется.",
-        reply_markup=main_kb(), parse_mode="Markdown"
-    )
+    await message.answer("✅ Бот готов к работе с Gist!", reply_markup=main_kb())
 
 @dp.message(F.text == "➕ Добавить фильтр")
-async def add_start(message: types.Message, state: FSMContext):
+async def add_f(message: types.Message, state: FSMContext):
     await state.set_state(FilterStates.add_name)
-    await message.answer("Введите название (например: Осмос 1-ступень):")
+    await message.answer("Введите название (например: Холодная вода):")
 
 @dp.message(FilterStates.add_name)
-async def add_name(message: types.Message, state: FSMContext):
+async def add_n(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await state.set_state(FilterStates.add_model)
-    await message.answer("Введите модель (например: МП-5В):")
-
-@dp.message(FilterStates.add_model)
-async def add_model(message: types.Message, state: FSMContext):
-    await state.update_data(model=message.text)
     await state.set_state(FilterStates.add_interval)
-    await message.answer("Срок замены в месяцах (число):")
+    await message.answer("Раз в сколько месяцев менять? (число):")
 
 @dp.message(FilterStates.add_interval)
-async def add_interval(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("Пожалуйста, введите только число.")
-    
+async def add_i(message: types.Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Нужно число.")
+    await state.update_data(interval=int(message.text))
+    await state.set_state(FilterStates.add_date)
+    await message.answer("Когда меняли последний раз? (ДД.ММ.ГГГГ)\nИли напиши 'сегодня'")
+
+@dp.message(FilterStates.add_date)
+async def add_d(message: types.Message, state: FSMContext):
+    user_date = message.text.lower()
+    if user_date == "сегодня":
+        clean_date = datetime.now().strftime("%Y-%m-%d")
+    else:
+        try:
+            clean_date = datetime.strptime(user_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+        except:
+            return await message.answer("❌ Формат должен быть ДД.ММ.ГГГГ (например 20.01.2024)")
+
     data = await state.get_data()
     uid = str(message.from_user.id)
     
@@ -92,36 +87,29 @@ async def add_interval(message: types.Message, state: FSMContext):
     
     db[uid].append({
         "name": data['name'],
-        "model": data['model'],
-        "interval": int(message.text),
-        "last_date": datetime.now().strftime("%Y-%m-%d")
+        "interval": data['interval'],
+        "last_date": clean_date
     })
     
     await save_db(db)
-    await message.answer(f"✅ Фильтр '{data['name']}' добавлен и сохранен в облако!", reply_markup=main_kb())
+    await message.answer(f"✅ Фильтр '{data['name']}' сохранен!", reply_markup=main_kb())
     await state.clear()
 
-@dp.message(F.text == "📊 Мои фильтры")
-async def show_status(message: types.Message):
+@dp.message(F.text == "📊 Статус")
+async def show(message: types.Message):
     db = await load_db()
-    uid = str(message.from_user.id)
-    user_filters = db.get(uid, [])
+    user_filters = db.get(str(message.from_user.id), [])
+    if not user_filters: return await message.answer("Пусто.")
     
-    if not user_filters:
-        return await message.answer("У вас пока нет фильтров.")
-
-    res = "📋 **Ваши фильтры:**\n\n"
+    res = "📋 **Сроки замены:**\n\n"
     for f in user_filters:
-        last_dt = datetime.strptime(f["last_date"], "%Y-%m-%d")
-        next_dt = last_dt + timedelta(days=f["interval"] * 30)
-        days_left = (next_dt - datetime.now()).days
-        
-        icon = "🟢" if days_left > 15 else "🟡" if days_left > 0 else "🔴"
-        res += f"{icon} **{f['name']}** ({f['model']})\n└ Замена через: {days_left} дн.\n\n"
-    
+        last = datetime.strptime(f['last_date'], "%Y-%m-%d")
+        next_d = last + timedelta(days=f['interval']*30)
+        days = (next_d - datetime.now()).days
+        icon = "🟢" if days > 15 else "🔴"
+        res += f"{icon} **{f['name']}**\n└ До: {next_d.strftime('%d.%m.%Y')} ({days} дн.)\n\n"
     await message.answer(res, parse_mode="Markdown")
 
-# --- СЕРВЕР ДЛЯ RENDER ---
 async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
