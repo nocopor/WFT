@@ -183,7 +183,8 @@ def add_new_filter(user_id, model_name, category):
         "category": category,
         "created_at": datetime.now().strftime("%d.%m.%Y"),
         "history": [],
-        "intervals": intervals
+        "intervals": intervals,
+        "notified": {} # Словарь для контроля отправленных уведомлений
     })
 
 @dp.message_handler(commands=['start'])
@@ -236,7 +237,6 @@ async def process_model(callback_query: types.CallbackQuery):
     
     add_new_filter(callback_query.from_user.id, full_model_name, category)
     
-    # Формируем подсказку с интервалами
     intervals_text = ""
     for comp_data in FILTER_CONFIGS[category].values():
         intervals_text += f"  ▫️ {comp_data['name']}: {comp_data['interval']} мес.\n"
@@ -244,8 +244,8 @@ async def process_model(callback_query: types.CallbackQuery):
     text = (
         f"✅ Система добавлена: <b>{full_model_name}</b>\n\n"
         f"💡 <b>Рекомендуемый ресурс:</b>\n{intervals_text}\n"
-        f"<i>⚙️ Если вода очень жесткая, изменить эти сроки можно в меню «Настройки».</i>\n\n"
-        f"Отсчет ресурса начат. Меню управления активно."
+        f"<i>⚙️ Изменить сроки можно в меню «Настройки».</i>\n\n"
+        f"Отсчет ресурса начат."
     )
     await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(callback_query.from_user.id, "Главное меню:", reply_markup=get_main_menu())
@@ -491,7 +491,6 @@ async def manual_input_done(message: types.Message, state: FSMContext):
     add_new_filter(message.from_user.id, message.text, category)
     await state.finish()
     
-    # Формируем подсказку с интервалами и для ручного ввода тоже
     intervals_text = ""
     for comp_data in FILTER_CONFIGS[category].values():
         intervals_text += f"  ▫️ {comp_data['name']}: {comp_data['interval']} мес.\n"
@@ -499,13 +498,78 @@ async def manual_input_done(message: types.Message, state: FSMContext):
     text = (
         f"✅ Добавлена система: <b>{message.text}</b>\n\n"
         f"💡 <b>Рекомендуемый ресурс:</b>\n{intervals_text}\n"
-        f"<i>⚙️ Если вода очень жесткая, изменить эти сроки можно в меню «Настройки».</i>\n\n"
+        f"<i>⚙️ Изменить сроки можно в меню «Настройки».</i>\n\n"
         f"Отсчет начат с сегодняшнего дня."
     )
     await message.answer(text, reply_markup=get_main_menu())
+
+# --- УМНЫЕ НАПОМИНАНИЯ (Фоновая задача) ---
+async def notification_scheduler():
+    while True:
+        now = datetime.now()
+        today_str = now.strftime("%d.%m.%Y")
+        
+        for user_id, user_filters in users_db.items():
+            for i, f in enumerate(user_filters):
+                category = f["category"]
+                intervals = f["intervals"]
+                history = f["history"]
+                components = FILTER_CONFIGS[category]
+                
+                # Добавляем словарь для отметок, если вдруг профиль был создан на старом коде
+                if "notified" not in f:
+                    f["notified"] = {}
+                
+                sorted_history = sorted(history, key=lambda x: datetime.strptime(x['date'], "%d.%m.%Y"))
+                
+                for code, comp_data in components.items():
+                    name = comp_data["name"]
+                    last_rep = next((item for item in reversed(sorted_history) if item["item"] == name), None)
+                    
+                    if last_rep:
+                        last_date = datetime.strptime(last_rep["date"], "%d.%m.%Y")
+                    else:
+                        created_at_str = f.get("created_at", now.strftime("%d.%m.%Y"))
+                        last_date = datetime.strptime(created_at_str, "%d.%m.%Y")
+                        
+                    next_rep_date = last_date + timedelta(days=intervals[code] * 30.4)
+                    days_left = (next_rep_date - now).days
+                    
+                    # Напоминаем за 7 дней, за 3 дня, день в день, и если просрочено на неделю
+                    if days_left in [7, 3, 0, -7]:
+                        # Проверяем, не отправляли ли мы уже уведомление конкретно сегодня
+                        if f["notified"].get(code) != today_str:
+                            try:
+                                text = (
+                                    f"🔔 <b>НАПОМИНАНИЕ!</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"🚰 Система: <b>{f['model']}</b>\n"
+                                    f"🔄 Элемент: <b>{name}</b>\n\n"
+                                )
+                                
+                                if days_left > 0:
+                                    text += f"🟡 <i>Ресурс заканчивается. Осталось дней: {days_left}</i>"
+                                elif days_left == 0:
+                                    text += f"🔴 <b>Срок вышел! Пора менять прямо сегодня.</b>"
+                                else:
+                                    text += f"🚨 <b>ПРОСРОЧЕНО на {abs(days_left)} дн.!</b>"
+                                    
+                                kb = types.InlineKeyboardMarkup(row_width=1)
+                                kb.add(
+                                    types.InlineKeyboardButton(text="🛒 Найти и купить картридж", callback_data=f"selbuy_{i}"),
+                                    types.InlineKeyboardButton(text="✅ Отметить как замененный", callback_data=f"rep_{code}_{i}")
+                                )
+                                
+                                await bot.send_message(user_id, text, reply_markup=kb)
+                                f["notified"][code] = today_str # Ставим галочку, что сегодня уже писали
+                                
+                            except Exception as e:
+                                logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+                                
+        await asyncio.sleep(3600) # Планировщик засыпает на 1 час, затем проверяет снова
 
 # --- ЗАПУСК ---
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(start_webserver())
+    loop.create_task(notification_scheduler()) # Запускаем фоновый планировщик
     executor.start_polling(dp, skip_updates=True)
