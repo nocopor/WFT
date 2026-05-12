@@ -236,9 +236,16 @@ async def process_model(callback_query: types.CallbackQuery):
     
     add_new_filter(callback_query.from_user.id, full_model_name, category)
     
+    # Формируем подсказку с интервалами
+    intervals_text = ""
+    for comp_data in FILTER_CONFIGS[category].values():
+        intervals_text += f"  ▫️ {comp_data['name']}: {comp_data['interval']} мес.\n"
+    
     text = (
         f"✅ Система добавлена: <b>{full_model_name}</b>\n\n"
-        f"<i>Отсчет ресурса начат. Меню управления активно.</i>"
+        f"💡 <b>Рекомендуемый ресурс:</b>\n{intervals_text}\n"
+        f"<i>⚙️ Если вода очень жесткая, изменить эти сроки можно в меню «Настройки».</i>\n\n"
+        f"Отсчет ресурса начат. Меню управления активно."
     )
     await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(callback_query.from_user.id, "Главное меню:", reply_markup=get_main_menu())
@@ -252,8 +259,6 @@ async def menu_status(message: types.Message):
     
     text = "📊 <b>ТЕКУЩИЙ СТАТУС СИСТЕМ</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
     now = datetime.now()
-    
-    # Множество для хранения индексов фильтров, которым нужна замена
     filters_needing_replacement = set()
     
     for i, f in enumerate(user_filters, 1):
@@ -282,27 +287,20 @@ async def menu_status(message: types.Message):
                 text += f"  ├ <b>{name}:</b> 🟢 Норма\n  └ <i>Замена через ~{days_left} дн.</i>\n"
             elif 0 <= days_left <= 30:
                 text += f"  ├ <b>{name}:</b> 🟡 Скоро замена\n  └ <i>Осталось: {days_left} дн.</i>\n"
-                filters_needing_replacement.add(i-1) # Добавляем индекс системы в список на покупку
+                filters_needing_replacement.add(i-1)
             else:
                 text += f"  ├ <b>{name}:</b> 🔴 <b>ПРОСРОЧЕНО</b>\n  └ <i>На {abs(days_left)} дн.</i>\n"
                 filters_needing_replacement.add(i-1)
         text += "\n"
         
-    # Генерируем кнопки покупки ТОЛЬКО если есть что-то просроченное или желтое
     if filters_needing_replacement:
         kb = types.InlineKeyboardMarkup(row_width=1)
         for f_idx in filters_needing_replacement:
             model_name = user_filters[f_idx]['model']
-            # Немного обрезаем имя для эстетики кнопки, если оно очень длинное
             short_model = model_name if len(model_name) <= 25 else model_name[:22] + "..."
-            
-            kb.add(types.InlineKeyboardButton(
-                text=f"🛒 Купить картриджи для: {short_model}",
-                callback_data=f"selbuy_{f_idx}" # Используем тот же колбэк, что и в главном меню покупок
-            ))
+            kb.add(types.InlineKeyboardButton(text=f"🛒 Купить картриджи для: {short_model}", callback_data=f"selbuy_{f_idx}"))
         await message.answer(text, reply_markup=kb)
     else:
-        # Если всё зеленое — выводим только аккуратный текст
         await message.answer(text)
 
 # --- НАСТРОЙКИ ---
@@ -412,7 +410,6 @@ async def process_date_selection(callback_query: types.CallbackQuery, state: FSM
     if action == "today":
         date_now = datetime.now().strftime("%d.%m.%Y")
         users_db[user_id][f_idx]["history"].append({"date": date_now, "item": item_name})
-        
         text = (
             f"✅ <b>Успешно сохранено!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -471,7 +468,6 @@ async def process_buy_sel(callback_query: types.CallbackQuery):
     f_idx = int(callback_query.data.split('_')[1])
     model = users_db[callback_query.from_user.id][f_idx]['model']
     
-    # Редактируем сообщение (это выглядит как плавный переход прямо из Статуса или из Меню покупок)
     await bot.edit_message_text(
         f"🛒 <b>Поиск картриджей</b>\n━━━━━━━━━━━━━━━━━━━━\nСистема: <b>{model}</b>\n\n<i>Выберите маркетплейс:</i>", 
         callback_query.message.chat.id, 
@@ -494,7 +490,19 @@ async def manual_input_done(message: types.Message, state: FSMContext):
     
     add_new_filter(message.from_user.id, message.text, category)
     await state.finish()
-    await message.answer(f"✅ Добавлена система: <b>{message.text}</b>\n<i>Отсчет начат с сегодняшнего дня.</i>", reply_markup=get_main_menu())
+    
+    # Формируем подсказку с интервалами и для ручного ввода тоже
+    intervals_text = ""
+    for comp_data in FILTER_CONFIGS[category].values():
+        intervals_text += f"  ▫️ {comp_data['name']}: {comp_data['interval']} мес.\n"
+
+    text = (
+        f"✅ Добавлена система: <b>{message.text}</b>\n\n"
+        f"💡 <b>Рекомендуемый ресурс:</b>\n{intervals_text}\n"
+        f"<i>⚙️ Если вода очень жесткая, изменить эти сроки можно в меню «Настройки».</i>\n\n"
+        f"Отсчет начат с сегодняшнего дня."
+    )
+    await message.answer(text, reply_markup=get_main_menu())
 
 # --- ЗАПУСК ---
 if __name__ == '__main__':
