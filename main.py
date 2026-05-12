@@ -2,6 +2,7 @@ import logging
 import os
 import asyncio
 from datetime import datetime
+from urllib.parse import quote
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
@@ -17,14 +18,15 @@ if not TOKEN:
     logging.error("ОШИБКА: BOT_TOKEN не найден в настройках Render!")
     exit(1)
 
-# Временная история замен (в памяти)
-REPLACEMENT_HISTORY = []
+# База данных пользователей (в памяти)
+# Формат: {user_id: {"model": "Название", "history": [{"date": "...", "item": "..."}]}}
+users_db = {}
 
-# Каталоги моделей
+# Расширенные каталоги
 CATALOGS = {
-    "osmos": ["Aquaphor DWM-101S", "Aquaphor Osmo Pro", "Geyser Prestige M", "Atoll A-550", "Prio Expert MO530"],
-    "stage3": ["Aquaphor Trio", "Barrier Profi Standard", "Geyser Standard", "Aquaphor Crystal"],
-    "flow": ["Barrier Expert Slim", "Aquaphor Favorit", "Geyser Bio", "Prio Praktic EU310"]
+    "osmos": ["Aquaphor DWM-101S", "Aquaphor Osmo Pro", "Geyser Prestige M", "Geyser Allegro", "Atoll A-550", "Atoll A-575m", "Barrier Profi Osmo", "Prio Expert MO530", "Xiaomi Mi Water", "Ecosoft Standard"],
+    "stage3": ["Aquaphor Trio", "Aquaphor Crystal", "Barrier Profi Standard", "Barrier Expert", "Geyser Standard", "Geyser Bio", "Prio Expert M310", "Новая Вода Expert"],
+    "flow": ["Barrier Expert Slim", "Aquaphor Favorit", "Geyser 1УЖ", "Prio Praktic", "Аквафор Модерн"]
 }
 
 class FilterStates(StatesGroup):
@@ -34,7 +36,7 @@ bot = Bot(token=TOKEN, parse_mode=types.ParseMode.MARKDOWN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (чтобы сервис не засыпал) ---
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -47,27 +49,25 @@ async def start_webserver():
     await site.start()
 
 # --- КЛАВИАТУРЫ ---
-
 def get_main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 Статус", "📅 Заменил картридж")
-    kb.row("📜 История", "⚙️ Настройки")
+    kb.row("📜 История", "🛒 Купить картриджи")
+    kb.row("⚙️ Настройки")
     return kb
 
 def get_categories_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
         types.InlineKeyboardButton(text="💧 Обратный осмос", callback_data="cat_osmos"),
-        types.InlineKeyboardButton(text="🧪 3-ступенчатый (стандарт)", callback_data="cat_stage3"),
-        types.InlineKeyboardButton(text="🚰 Проточный (компакт)", callback_data="cat_flow")
+        types.InlineKeyboardButton(text="🧪 3-ступенчатый", callback_data="cat_stage3"),
+        types.InlineKeyboardButton(text="🚰 Проточный", callback_data="cat_flow")
     )
     return kb
 
 def get_models_kb(category_key):
     kb = types.InlineKeyboardMarkup(row_width=1)
-    models = CATALOGS.get(category_key, [])
-    for model in models:
-        # Обрезаем имя для callback_data, чтобы вписаться в лимит 64 байта
+    for model in CATALOGS.get(category_key, []):
         kb.add(types.InlineKeyboardButton(text=model, callback_data=f"mod_{model[:20]}"))
     kb.add(types.InlineKeyboardButton(text="📝 Свой вариант", callback_data="mod_manual"))
     kb.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_cats"))
@@ -83,14 +83,19 @@ def get_replacement_kb():
     )
     return kb
 
-# --- ОБРАБОТКА КОМАНД И КАТЕГОРИЙ ---
+def get_market_kb(model_name):
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    query = quote(f"картриджи для фильтра {model_name}")
+    kb.add(
+        types.InlineKeyboardButton(text="🛒 Найти на Ozon", url=f"https://www.ozon.ru/search/?text={query}"),
+        types.InlineKeyboardButton(text="🟣 Найти на Wildberries", url=f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}")
+    )
+    return kb
 
+# --- ХЕНДЛЕРЫ НАСТРОЙКИ ---
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    await message.answer(
-        f"Привет, {message.from_user.first_name}! 🚰\nВыберите тип вашей системы фильтрации:",
-        reply_markup=get_categories_kb()
-    )
+    await message.answer("Привет! 🚰\nКакую систему фильтрации будем отслеживать?", reply_markup=get_categories_kb())
 
 @dp.callback_query_handler(lambda c: c.data == 'back_to_cats')
 @dp.callback_query_handler(lambda c: c.data.startswith('cat_'))
@@ -105,71 +110,102 @@ async def process_category(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data.startswith('mod_') and c.data != 'mod_manual')
 async def process_model(callback_query: types.CallbackQuery):
     model_name = callback_query.data.replace('mod_', '')
-    await bot.edit_message_text(f"✅ Система установлена: *{model_name}*", callback_query.message.chat.id, callback_query.message.message_id)
-    await bot.send_message(callback_query.from_user.id, "Бот готов. Используйте меню для управления.", reply_markup=get_main_menu())
+    user_id = callback_query.from_user.id
+    
+    # Сохраняем систему за пользователем
+    if user_id not in users_db:
+        users_db[user_id] = {"history": []}
+    users_db[user_id]["model"] = model_name
+
+    await bot.edit_message_text(f"✅ Система привязана: *{model_name}*", callback_query.message.chat.id, callback_query.message.message_id)
+    await bot.send_message(user_id, "Бот готов. Используйте меню:", reply_markup=get_main_menu())
     await bot.answer_callback_query(callback_query.id)
 
-# --- ГЛАВНОЕ МЕНЮ (Обработка текста) ---
-
+# --- ГЛАВНОЕ МЕНЮ ---
 @dp.message_handler(lambda m: m.text == "📊 Статус")
 async def menu_status(message: types.Message):
-    await message.answer("🔍 *Статус:* Все системы в норме.\nРесурс картриджей в среднем 80-90%.")
+    user_data = users_db.get(message.from_user.id)
+    if not user_data or "model" not in user_data:
+        return await message.answer("Сначала выберите систему в настройках ⚙️")
+    
+    await message.answer(f"🔍 *Текущая система:* {user_data['model']}\n\n▫️ Предфильтры: в норме (замена через ~180 дней)\n▫️ Мембрана: в норме (замена через ~730 дней)\n▫️ Постфильтр: в норме (замена через ~365 дней)")
 
 @dp.message_handler(lambda m: m.text == "📅 Заменил картридж")
 async def menu_replacement(message: types.Message):
-    await message.answer("Что именно вы заменили?", reply_markup=get_replacement_kb())
+    user_data = users_db.get(message.from_user.id)
+    if not user_data or "model" not in user_data:
+        return await message.answer("Сначала выберите систему в настройках ⚙️")
+    
+    await message.answer(f"🛠 *Система:* {user_data['model']}\nЧто именно вы заменили сейчас?", reply_markup=get_replacement_kb())
+
+@dp.message_handler(lambda m: m.text == "🛒 Купить картриджи")
+async def menu_buy(message: types.Message):
+    user_data = users_db.get(message.from_user.id)
+    if not user_data or "model" not in user_data:
+        return await message.answer("Сначала выберите систему в настройках ⚙️")
+    
+    model = user_data['model']
+    await message.answer(f"Где будем искать картриджи для *{model}*?", reply_markup=get_market_kb(model))
 
 @dp.message_handler(lambda m: m.text == "📜 История")
 async def menu_history(message: types.Message):
-    if not REPLACEMENT_HISTORY:
-        await message.answer("История замен пока пуста.")
-        return
+    user_data = users_db.get(message.from_user.id)
+    if not user_data or not user_data.get("history"):
+        return await message.answer("📜 История замен пуста.")
     
-    text = "📜 *История замен (последние 10):*\n\n"
-    for entry in REPLACEMENT_HISTORY[-10:]:
+    text = f"📜 *История замен для {user_data.get('model', 'вашей системы')}:*\n\n"
+    for entry in user_data["history"][-10:]:
         text += f"▫️ {entry['date']} — {entry['item']}\n"
     await message.answer(text)
 
 @dp.message_handler(lambda m: m.text == "⚙️ Настройки")
 async def menu_settings(message: types.Message):
-    await message.answer("Выберите новый тип или модель фильтра:", reply_markup=get_categories_kb())
+    await message.answer("Смена системы фильтрации:", reply_markup=get_categories_kb())
 
-# --- ОБРАБОТКА ЗАМЕН (Инлайн кнопки) ---
-
+# --- ОБРАБОТКА ЗАМЕН (Инлайн) ---
 @dp.callback_query_handler(lambda c: c.data.startswith('rep_'))
 async def handle_replace_action(callback_query: types.CallbackQuery):
     code = callback_query.data.split('_')[1]
     if code == "cancel":
         await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-        await bot.answer_callback_query(callback_query.id)
-        return
+        return await bot.answer_callback_query(callback_query.id)
+
+    user_id = callback_query.from_user.id
+    user_data = users_db.get(user_id)
+    
+    if not user_data or "model" not in user_data:
+        return await bot.answer_callback_query(callback_query.id, "Ошибка: система не выбрана")
 
     mapping = {"pre": "Предфильтры", "mem": "Мембрана", "post": "Постфильтр"}
-    item_name = mapping.get(code, "Неизвестный блок")
-    date_now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    item_name = mapping.get(code, "Деталь")
+    date_now = datetime.now().strftime("%d.%m.%Y")
     
-    # Сохраняем в список
-    REPLACEMENT_HISTORY.append({"date": date_now, "item": item_name})
+    # Сохраняем в историю конкретного пользователя
+    user_data["history"].append({"date": date_now, "item": item_name})
     
     await bot.edit_message_text(
-        f"✅ Данные сохранены!\nЗаменено: *{item_name}*\nДата: {date_now}", 
+        f"✅ Обслуживание записано!\nСистема: *{user_data['model']}*\nЗаменено: *{item_name}*\nДата: {date_now}", 
         callback_query.message.chat.id, 
         callback_query.message.message_id
     )
     await bot.answer_callback_query(callback_query.id)
 
 # --- РУЧНОЙ ВВОД ---
-
 @dp.callback_query_handler(lambda c: c.data == 'mod_manual')
 async def manual_input_start(callback_query: types.CallbackQuery):
     await FilterStates.waiting_for_manual_name.set()
-    await bot.send_message(callback_query.from_user.id, "Введите название вашей системы:")
+    await bot.send_message(callback_query.from_user.id, "Введите полное название вашей системы:")
     await bot.answer_callback_query(callback_query.id)
 
 @dp.message_handler(state=FilterStates.waiting_for_manual_name)
 async def manual_input_done(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in users_db:
+        users_db[user_id] = {"history": []}
+    users_db[user_id]["model"] = message.text
+
     await state.finish()
-    await message.answer(f"✅ Записал модель: *{message.text}*", reply_markup=get_main_menu())
+    await message.answer(f"✅ Установлена система: *{message.text}*", reply_markup=get_main_menu())
 
 # --- ЗАПУСК ---
 if __name__ == '__main__':
