@@ -23,44 +23,67 @@ users_db = {}
 # --- КАТАЛОГ ---
 CATALOGS = {
     "osmos": {
-        "Аквафор": ["DWM-101S Морион", "Осмо Про 50", "Осмо 50 ПН"],
-        "Гейзер": ["Престиж", "Аллегро", "Маэстро"],
         "Атолл": ["A-550", "A-575", "A-450"],
-        "Барьер": ["Профи Осмо 100", "Compact Osmo"],
+        "Барьер": ["Профи Осмо 100", "Профи Осмо 100 М", "Compact Osmo"],
+        "Гейзер": ["Престиж", "Аллегро", "Маэстро"],
+        "Аквафор": ["DWM-101S Морион", "Осмо Про 50", "Осмо 50 ПН"],
         "Prio (Новая Вода)": ["Эксперт Osmos MO530", "Start Osmos"],
         "Другие": ["Xiaomi Mi Water", "Экософт Стандарт"]
     },
     "stage3": {
-        "Аквафор": ["Кристалл", "Трио"],
+        "Атолл": ["Патриот", "D-31"],
+        "Барьер": ["Профи Стандарт", "Профи Смягчение", "Профи Ферростоп", "Профи Комплекс"],
         "Гейзер": ["Макс", "Стандарт", "Классик", "БИО"],
-        "Барьер": ["Эксперт", "Профи"],
-        "Prio (Новая Вода)": ["Expert M310", "Praktic EU310"],
-        "Атолл": ["Патриот", "D-31"]
+        "Аквафор": ["Кристалл Эко", "Трио", "Трио Норма", "Кристалл Н"],
+        "Prio (Новая Вода)": ["Expert M310", "Praktic EU310"]
     },
     "flow": {
-        "Аквафор": ["Фаворит", "Модерн", "Викинг 10SL", "Викинг 10BB", "Викинг 20BB"],
-        "Гейзер": ["Тайфун 10SL", "Тайфун 10BB", "Тайфун 20BB", "1УЖ Евро"],
-        "Барьер": ["In-Line", "ВМ 1/2"],
-        "Джилекс": ["Колба 10SL", "Колба 10BB", "Колба 20BB"]
+        "Аквафор": ["Фаворит", "Модерн", "Викинг 10SL"],
+        "Барьер": ["In-Line Механика", "In-Line Уголь", "ВМ 1/2"],
+        "Гейзер": ["Тайфун 10SL", "Тайфун 10BB"],
+        "Джилекс": ["Колба 10SL", "Колба 10BB"]
     }
 }
 
+# УСРЕДНЕННЫЕ БАЗОВЫЕ ЗНАЧЕНИЯ (Для других брендов и ручного ввода)
 FILTER_CONFIGS = {
     "osmos": {
-        "pre": {"name": "Предфильтры", "interval": 6},
-        "mem": {"name": "Мембрана", "interval": 24},
-        "post": {"name": "Постфильтр", "interval": 12}
+        "pre": {"name": "Предфильтры (ступ. 1-3)", "interval": 6},
+        "mem": {"name": "Мембрана RO", "interval": 24}, 
+        "post": {"name": "Постфильтр", "interval": 12},
+        "min": {"name": "Минерализатор", "interval": 12}
     },
     "stage3": {
-        "set": {"name": "Комплект картриджей", "interval": 12}
+        "set": {"name": "Комплект картриджей (ступ. 1-3)", "interval": 12}
     },
     "flow": {
         "cart": {"name": "Сменный модуль", "interval": 6}
     }
 }
 
+# ИНДИВИДУАЛЬНЫЕ НАСТРОЙКИ ПО БРЕНДАМ
+BRAND_INTERVALS = {
+    "Аквафор": {
+        "osmos": {"pre": 6, "mem": 18, "post": 12, "min": 12},
+        "stage3": {"set": 12} 
+    },
+    "Атолл": {
+        "osmos": {"pre": 6, "mem": 24, "post": 12, "min": 12},
+        "stage3": {"set": 6}
+    },
+    "Барьер": {
+        "osmos": {"pre": 6, "mem": 12, "post": 6, "min": 4},
+        "stage3": {"set": 6}
+    },
+    "Гейзер": {
+        "osmos": {"pre": 12, "mem": 24, "post": 12, "min": 12},
+        "stage3": {"set": 12}
+    }
+}
+
 class FilterStates(StatesGroup):
     waiting_for_manual_name = State()
+    waiting_for_custom_interval = State()
     waiting_for_date = State()
     waiting_for_interval = State()
 
@@ -92,7 +115,8 @@ def get_settings_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
         types.InlineKeyboardButton(text="⏱ Настроить интервалы", callback_data="set_intervals"),
-        types.InlineKeyboardButton(text="🗑 Очистить профиль", callback_data="set_clear")
+        types.InlineKeyboardButton(text="🗑 Удалить систему", callback_data="set_del_filter"), # НОВАЯ КНОПКА
+        types.InlineKeyboardButton(text="🧨 Очистить профиль полностью", callback_data="set_clear")
     )
     return kb
 
@@ -109,7 +133,8 @@ def get_brands_kb(category_key):
     kb = types.InlineKeyboardMarkup(row_width=2)
     brands = list(CATALOGS[category_key].keys())
     for brand in brands:
-        kb.insert(types.InlineKeyboardButton(text=brand, callback_data=f"br_{category_key}_{brand}"))
+        marker = " 🔹" if brand in BRAND_INTERVALS else ""
+        kb.insert(types.InlineKeyboardButton(text=brand + marker, callback_data=f"br_{category_key}_{brand}"))
     kb.add(types.InlineKeyboardButton(text="📝 Свой вариант", callback_data=f"manual_{category_key}"))
     kb.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_cats"))
     return kb
@@ -174,24 +199,29 @@ def get_market_kb(model_name):
     return kb
 
 # --- ДОБАВЛЕНИЕ СИСТЕМЫ ---
-def add_new_filter(user_id, model_name, category):
+def add_new_filter(user_id, model_name, category, custom_intervals=None):
     if user_id not in users_db:
         users_db[user_id] = []
-    intervals = {code: data["interval"] for code, data in FILTER_CONFIGS[category].items()}
+        
+    if custom_intervals:
+        intervals = custom_intervals
+    else:
+        intervals = {code: data["interval"] for code, data in FILTER_CONFIGS[category].items()}
+        
     users_db[user_id].append({
         "model": model_name, 
         "category": category,
         "created_at": datetime.now().strftime("%d.%m.%Y"),
         "history": [],
         "intervals": intervals,
-        "notified": {} # Словарь для контроля отправленных уведомлений
+        "notified": {}
     })
 
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
     text = (
         "💧 <b>Добро пожаловать!</b>\n\n"
-        "Я помогу вовремя обслуживать ваши фильтры для воды.\n"
+        "Я — ваш личный помощник по обслуживанию домашних фильтров для воды.\n"
         "<i>Какую систему добавим в ваш профиль?</i>"
     )
     await message.answer(text, reply_markup=get_categories_kb())
@@ -235,20 +265,144 @@ async def process_model(callback_query: types.CallbackQuery):
     model_name = CATALOGS[category][brand][model_idx]
     full_model_name = f"{brand} {model_name}"
     
-    add_new_filter(callback_query.from_user.id, full_model_name, category)
+    intervals = {}
+    brand_data = BRAND_INTERVALS.get(brand, {}).get(category)
+    for code, comp_data in FILTER_CONFIGS[category].items():
+        if brand_data and code in brand_data:
+            intervals[code] = brand_data[code]
+        else:
+            intervals[code] = comp_data["interval"]
+    
+    add_new_filter(callback_query.from_user.id, full_model_name, category, intervals)
     
     intervals_text = ""
-    for comp_data in FILTER_CONFIGS[category].values():
-        intervals_text += f"  ▫️ {comp_data['name']}: {comp_data['interval']} мес.\n"
+    for code, comp_data in FILTER_CONFIGS[category].items():
+        intervals_text += f"  ▫️ {comp_data['name']}: {intervals[code]} мес.\n"
     
     text = (
         f"✅ Система добавлена: <b>{full_model_name}</b>\n\n"
-        f"💡 <b>Рекомендуемый ресурс:</b>\n{intervals_text}\n"
-        f"<i>⚙️ Изменить сроки можно в меню «Настройки».</i>\n\n"
-        f"Отсчет ресурса начат."
+        f"💡 <b>Рекомендуемый ресурс ({brand}):</b>\n{intervals_text}\n"
+        f"<i>⚙️ Изменить сроки под свой расход воды можно в меню «Настройки».</i>\n\n"
     )
+    
+    if category == "osmos":
+        text += "🛡 <b>Важное правило:</b> Регулярная замена недорогих предфильтров принимает на себя удар хлора и загрязнений, спасая самую дорогую деталь системы — мембрану!\n\n"
+        
+    if brand == "Гейзер":
+        if category == "stage3":
+            text += "⚠️ <i>Примечание: для Гейзера указан срок работы на мягкой воде (1 год). При очень жесткой воде накипь может появиться уже через 2 месяца! Вы можете сократить этот срок в Настройках.</i>\n\n"
+        elif category == "osmos":
+            text += "⚠️ <i>Примечание: мембрана Гейзер меняется строго при первом появлении накипи. Бот установил усредненный срок (2 года), следите за качеством воды.</i>\n\n"
+
+    elif brand == "Аквафор":
+        if category == "stage3":
+            text += "⚠️ <i>Примечание: Картриджи серии Pro служат до 1.5 лет. Умягчающие модули (с пометкой Н) можно регенерировать солью. Если напор воды резко упал — пора менять полипропиленовый модуль!</i>\n\n"
+        elif category == "osmos" and "DWM" in full_model_name:
+            text += "🌟 <i>Супер: Ваша система серии DWM! За счет экономичного слива воды в дренаж, предфильтры в ней могут прослужить дольше стандартных.</i>\n\n"
+
+    text += "Отсчет ресурса начат. Меню управления активно."
+
     await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(callback_query.from_user.id, "Главное меню:", reply_markup=get_main_menu())
+
+
+# --- РУЧНОЙ ВВОД ---
+@dp.callback_query_handler(lambda c: c.data.startswith('manual_'))
+async def manual_input_start(callback_query: types.CallbackQuery, state: FSMContext):
+    category = callback_query.data.split('_')[1]
+    
+    await bot.edit_message_text(
+        "📝 <i>Выбран ручной ввод названия системы...</i>", 
+        callback_query.message.chat.id, 
+        callback_query.message.message_id
+    )
+    
+    await state.update_data(manual_category=category)
+    await FilterStates.waiting_for_manual_name.set()
+    await bot.send_message(callback_query.from_user.id, "<b>Введите полное название вашей системы:</b>")
+
+@dp.message_handler(state=FilterStates.waiting_for_manual_name)
+async def manual_input_done(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    category = data.get("manual_category", "osmos")
+    model_name = message.text
+    
+    components = list(FILTER_CONFIGS[category].keys())
+    
+    await state.update_data(
+        manual_model_name=model_name,
+        components_to_ask=components,
+        current_comp_idx=0,
+        custom_intervals={}
+    )
+    
+    await ask_next_custom_interval(message, state)
+
+async def ask_next_custom_interval(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    components = data['components_to_ask']
+    idx = data['current_comp_idx']
+    category = data['manual_category']
+    
+    if idx >= len(components):
+        custom_intervals = data['custom_intervals']
+        model_name = data['manual_model_name']
+        
+        add_new_filter(message.from_user.id, model_name, category, custom_intervals)
+        await state.finish()
+        
+        intervals_text = ""
+        for comp_code, months in custom_intervals.items():
+            comp_name = FILTER_CONFIGS[category][comp_code]['name']
+            intervals_text += f"  ▫️ {comp_name}: {months} мес.\n"
+
+        text = (
+            f"✅ Добавлена система: <b>{model_name}</b>\n\n"
+            f"💡 <b>Установленный ресурс:</b>\n{intervals_text}\n"
+            f"<i>⚙️ Изменить сроки можно в меню «Настройки».</i>\n\n"
+        )
+        if category == "osmos":
+             text += "🛡 <b>Важное правило:</b> Регулярная замена предфильтров спасает самую дорогую деталь системы — мембрану!\n\n"
+             
+        text += "Отсчет начат с сегодняшнего дня."
+        await message.answer(text, reply_markup=get_main_menu())
+        return
+        
+    comp_code = components[idx]
+    comp_name = FILTER_CONFIGS[category][comp_code]['name']
+    default_int = FILTER_CONFIGS[category][comp_code]['interval']
+    
+    await FilterStates.waiting_for_custom_interval.set()
+    
+    text = (
+        f"⏱ <b>Укажите срок замены для: {comp_name}</b>\n\n"
+        f"<i>💡 Среднее значение для подобных систем: <b>{default_int} мес.</b></i>\n\n"
+        f"Введите количество месяцев (цифрой, например: {default_int}):"
+    )
+    await message.answer(text)
+
+@dp.message_handler(state=FilterStates.waiting_for_custom_interval)
+async def process_custom_interval(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("⚠️ Пожалуйста, введите только цифру (например, 6).")
+        
+    months = int(message.text)
+    data = await state.get_data()
+    
+    components = data['components_to_ask']
+    idx = data['current_comp_idx']
+    comp_code = components[idx]
+    
+    custom_intervals = data['custom_intervals']
+    custom_intervals[comp_code] = months
+    
+    await state.update_data(
+        custom_intervals=custom_intervals,
+        current_comp_idx=idx + 1
+    )
+    
+    await ask_next_custom_interval(message, state)
+
 
 # --- УМНЫЙ СТАТУС С КНОПКАМИ ПОКУПКИ ---
 @dp.message_handler(lambda m: m.text == "📊 Статус")
@@ -308,8 +462,8 @@ async def menu_status(message: types.Message):
 async def menu_settings(message: types.Message):
     text = (
         "⚙️ <b>НАСТРОЙКИ ПРОФИЛЯ</b>\n\n"
-        "<i>Здесь вы можете изменить стандартные сроки "
-        "замены картриджей под вашу воду или полностью очистить данные.</i>"
+        "<i>Здесь вы можете изменить установленные сроки "
+        "замены или удалить ненужные системы.</i>"
     )
     await message.answer(text, reply_markup=get_settings_kb())
 
@@ -361,12 +515,41 @@ async def handle_new_interval(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer(f"✅ Новый интервал сохранен: <b>{months} мес.</b>", reply_markup=get_main_menu())
 
+# НОВОЕ: Удаление конкретного фильтра
+@dp.callback_query_handler(lambda c: c.data == 'set_del_filter')
+async def settings_delete_filter(callback_query: types.CallbackQuery):
+    user_filters = users_db.get(callback_query.from_user.id, [])
+    if not user_filters:
+        return await callback_query.answer("Нет добавленных фильтров", show_alert=True)
+        
+    await bot.edit_message_text(
+        "<b>Какую систему вы хотите удалить?</b>", 
+        callback_query.message.chat.id, 
+        callback_query.message.message_id, 
+        reply_markup=get_user_filters_kb(callback_query.from_user.id, 'seldel')
+    )
+
+@dp.callback_query_handler(lambda c: c.data.startswith('seldel_'))
+async def process_delete_filter(callback_query: types.CallbackQuery):
+    f_idx = int(callback_query.data.split('_')[1])
+    user_id = callback_query.from_user.id
+    
+    if user_id in users_db and len(users_db[user_id]) > f_idx:
+        deleted_model = users_db[user_id].pop(f_idx)['model']
+        await bot.edit_message_text(
+            f"🗑 Система <b>{deleted_model}</b> успешно удалена из вашего профиля!", 
+            callback_query.message.chat.id, 
+            callback_query.message.message_id
+        )
+    else:
+        await callback_query.answer("Ошибка при удалении", show_alert=True)
+
 @dp.callback_query_handler(lambda c: c.data == 'set_clear')
 async def settings_clear(callback_query: types.CallbackQuery):
     users_db[callback_query.from_user.id] = []
-    await bot.edit_message_text("🗑 <b>Профиль очищен.</b>\nДобавьте систему заново.", callback_query.message.chat.id, callback_query.message.message_id)
+    await bot.edit_message_text("🧨 <b>Профиль полностью очищен.</b>\nВсе системы удалены.", callback_query.message.chat.id, callback_query.message.message_id)
 
-# --- ЗАМЕНА ---
+# --- ЗАМЕНА С СОВЕТАМИ ПО ПРОФИЛАКТИКЕ ---
 @dp.message_handler(lambda m: m.text == "📅 Заменил картридж")
 async def menu_replacement(message: types.Message):
     user_filters = users_db.get(message.from_user.id, [])
@@ -403,13 +586,16 @@ async def process_date_selection(callback_query: types.CallbackQuery, state: FSM
     f_idx = int(parts[3])
     
     user_id = callback_query.from_user.id
-    category = users_db[user_id][f_idx]["category"]
+    filter_data = users_db[user_id][f_idx]
+    category = filter_data["category"]
     item_name = FILTER_CONFIGS[category][item_code]["name"]
-    model_name = users_db[user_id][f_idx]["model"]
+    model_name = filter_data["model"]
     
     if action == "today":
-        date_now = datetime.now().strftime("%d.%m.%Y")
+        date_now_dt = datetime.now()
+        date_now = date_now_dt.strftime("%d.%m.%Y")
         users_db[user_id][f_idx]["history"].append({"date": date_now, "item": item_name})
+        
         text = (
             f"✅ <b>Успешно сохранено!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -418,22 +604,52 @@ async def process_date_selection(callback_query: types.CallbackQuery, state: FSM
             f"🔹 <b>Дата:</b> <code>{date_now}</code>"
         )
         await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id)
+        
+        created_at_str = filter_data.get("created_at", date_now)
+        try:
+            created_at_dt = datetime.strptime(created_at_str, "%d.%m.%Y")
+            system_age_days = (date_now_dt - created_at_dt).days
+        except:
+            system_age_days = 0
+
+        tips_text = "💡 <b>Полезные советы при замене:</b>\n\n"
+        tips_text += "🧽 При замене фильтроэлементов рекомендуется промывать колбы от налета при помощи ёршика и средства для мытья посуды.\n"
+        
+        if item_code == "pre" and category == "osmos":
+            tips_text += "\n🛡 <b>Отлично!</b> Своевременная замена предфильтров принимает на себя основной удар и надежно защищает самую дорогую деталь системы — мембрану."
+
+        if system_age_days >= 365 and (system_age_days % 365) < 7:
+            tips_text += "\n\n🚨 <b>Внимание:</b> Вашей системе уже больше года. Производитель рекомендует заменять прокладки под крышками колб <b>один раз в год</b>, чтобы избежать протечек!"
+        
+        await bot.send_message(user_id, tips_text)
+        
     elif action == "manual":
-        await state.update_data(f_idx=f_idx, item_name=item_name, model_name=model_name)
+        await state.update_data(f_idx=f_idx, item_code=item_code, item_name=item_name, model_name=model_name, category=category)
         await FilterStates.waiting_for_date.set()
         await bot.edit_message_text(f"Отправьте дату замены для <b>{item_name}</b>\n<i>Формат:</i> <code>ДД.ММ.ГГГГ</code> (например, 15.08.2023):", callback_query.message.chat.id, callback_query.message.message_id)
 
 @dp.message_handler(state=FilterStates.waiting_for_date)
 async def manual_date_input(message: types.Message, state: FSMContext):
+    user_input = message.text.strip()
     try:
-        valid_date = datetime.strptime(message.text.strip(), "%d.%m.%Y").strftime("%d.%m.%Y")
+        input_date_dt = datetime.strptime(user_input, "%d.%m.%Y")
+        valid_date = input_date_dt.strftime("%d.%m.%Y")
     except ValueError:
         return await message.answer("⚠️ Ошибка формата!\n<i>Ожидается:</i> <code>ДД.ММ.ГГГГ</code>")
     
     data = await state.get_data()
-    users_db[message.from_user.id][data['f_idx']]["history"].append({"date": valid_date, "item": data['item_name']})
+    f_idx = data['f_idx']
+    user_id = message.from_user.id
+    
+    users_db[user_id][f_idx]["history"].append({"date": valid_date, "item": data['item_name']})
     await state.finish()
     await message.answer(f"✅ Дата <code>{valid_date}</code> успешно сохранена в историю!", reply_markup=get_main_menu())
+    
+    tips_text = "💡 <b>Полезный совет:</b> При замене фильтроэлементов не забывайте промывать колбы от налета при помощи ёршика и средства для мытья посуды.\n"
+    if data.get('item_code') == "pre" and data.get('category') == "osmos":
+         tips_text += "\n🛡 <b>Отлично!</b> Замена предфильтров сбережет ресурс вашей мембраны."
+
+    await message.answer(tips_text)
 
 # --- ИСТОРИЯ И ПОКУПКА ---
 @dp.message_handler(lambda m: m.text == "📜 История")
@@ -475,35 +691,7 @@ async def process_buy_sel(callback_query: types.CallbackQuery):
         reply_markup=get_market_kb(model)
     )
 
-# --- РУЧНОЙ ВВОД ---
-@dp.callback_query_handler(lambda c: c.data.startswith('manual_'))
-async def manual_input_start(callback_query: types.CallbackQuery, state: FSMContext):
-    category = callback_query.data.split('_')[1]
-    await state.update_data(manual_category=category)
-    await FilterStates.waiting_for_manual_name.set()
-    await bot.send_message(callback_query.from_user.id, "<b>Введите полное название вашей системы:</b>")
-
-@dp.message_handler(state=FilterStates.waiting_for_manual_name)
-async def manual_input_done(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    category = data.get("manual_category", "osmos")
-    
-    add_new_filter(message.from_user.id, message.text, category)
-    await state.finish()
-    
-    intervals_text = ""
-    for comp_data in FILTER_CONFIGS[category].values():
-        intervals_text += f"  ▫️ {comp_data['name']}: {comp_data['interval']} мес.\n"
-
-    text = (
-        f"✅ Добавлена система: <b>{message.text}</b>\n\n"
-        f"💡 <b>Рекомендуемый ресурс:</b>\n{intervals_text}\n"
-        f"<i>⚙️ Изменить сроки можно в меню «Настройки».</i>\n\n"
-        f"Отсчет начат с сегодняшнего дня."
-    )
-    await message.answer(text, reply_markup=get_main_menu())
-
-# --- УМНЫЕ НАПОМИНАНИЯ (Фоновая задача) ---
+# --- УМНЫЕ НАПОМИНАНИЯ ---
 async def notification_scheduler():
     while True:
         now = datetime.now()
@@ -516,7 +704,6 @@ async def notification_scheduler():
                 history = f["history"]
                 components = FILTER_CONFIGS[category]
                 
-                # Добавляем словарь для отметок, если вдруг профиль был создан на старом коде
                 if "notified" not in f:
                     f["notified"] = {}
                 
@@ -535,9 +722,7 @@ async def notification_scheduler():
                     next_rep_date = last_date + timedelta(days=intervals[code] * 30.4)
                     days_left = (next_rep_date - now).days
                     
-                    # Напоминаем за 7 дней, за 3 дня, день в день, и если просрочено на неделю
                     if days_left in [7, 3, 0, -7]:
-                        # Проверяем, не отправляли ли мы уже уведомление конкретно сегодня
                         if f["notified"].get(code) != today_str:
                             try:
                                 text = (
@@ -560,16 +745,15 @@ async def notification_scheduler():
                                 )
                                 
                                 await bot.send_message(user_id, text, reply_markup=kb)
-                                f["notified"][code] = today_str # Ставим галочку, что сегодня уже писали
+                                f["notified"][code] = today_str
                                 
                             except Exception as e:
-                                logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+                                logging.error(f"Не удалось отправить уведомление {user_id}: {e}")
                                 
-        await asyncio.sleep(3600) # Планировщик засыпает на 1 час, затем проверяет снова
+        await asyncio.sleep(3600)
 
-# --- ЗАПУСК ---
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(start_webserver())
-    loop.create_task(notification_scheduler()) # Запускаем фоновый планировщик
+    loop.create_task(notification_scheduler())
     executor.start_polling(dp, skip_updates=True)
