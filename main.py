@@ -117,18 +117,18 @@ def get_settings_kb():
 
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    await message.answer("💧 <b>Сервис контроля фильтров v11.0</b>\nВыберите действие в меню или добавьте новую систему.", reply_markup=get_main_menu())
+    await message.answer("💧 <b>Сервис контроля фильтров v11.5</b>\nВыберите действие в меню или добавьте новую систему.", reply_markup=get_main_menu())
 
 @dp.message_handler(lambda m: m.text == "➕ Добавить фильтр")
 async def add_filter_start(message: types.Message):
     await message.answer("Выберите тип вашей системы:", reply_markup=get_categories_kb())
 
 @dp.message_handler(lambda m: m.text == "⚙️ Настройки")
-async def cmd_settings(message: types.Message):
+async def cmd_settings_handler(message: types.Message):
     await message.answer("⚙️ <b>Меню настроек:</b>", reply_markup=get_settings_kb())
 
 @dp.message_handler(lambda m: m.text == "📊 Статус")
-async def cmd_status(message: types.Message):
+async def cmd_status_handler(message: types.Message):
     uid = str(message.from_user.id)
     if uid not in users_db or not users_db[uid]:
         return await message.answer("У вас нет добавленных систем. Нажмите «➕ Добавить фильтр»")
@@ -151,16 +151,14 @@ async def cmd_status(message: types.Message):
             days_left = int(total_days - elapsed_days)
             percent = max(0, min(100, int((days_left / total_days) * 100)))
             
+            # УМНАЯ ЛОГИКА СТАТУСОВ
             icon = "🟢"
-# Если ресурс закончился или ушел в минус
-if days_left <= 0:
-    icon = "🔴"
-    needs_buy = True
-# Желтый включается, если осталось меньше 30 дней И ресурс меньше 25% 
-# (чтобы новые месячные фильтры не были желтыми сразу)
-elif days_left <= 30 and percent <= 25:
-    icon = "🟡"
-    needs_buy = True
+            if days_left <= 0:
+                icon = "🔴"
+                needs_buy = True
+            elif days_left <= 30 and percent <= 25:
+                icon = "🟡"
+                needs_buy = True
             
             res += f"  ├ {icon} <b>{name}</b>\n"
             res += f"  └ {get_progress_bar(percent)} (~{days_left} дн.)\n"
@@ -173,11 +171,11 @@ elif days_left <= 30 and percent <= 25:
 # --- НАВИГАЦИЯ КАТАЛОГА ---
 
 @dp.callback_query_handler(lambda c: c.data == "back_cats")
-async def back_to_cats(callback_query: types.CallbackQuery):
+async def back_to_cats_handler(callback_query: types.CallbackQuery):
     await bot.edit_message_text("Выберите тип системы:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_categories_kb())
 
 @dp.callback_query_handler(lambda c: c.data.startswith("cat_"))
-async def process_cat(callback_query: types.CallbackQuery):
+async def process_cat_handler(callback_query: types.CallbackQuery):
     cat = callback_query.data.split('_')[1]
     kb = types.InlineKeyboardMarkup(row_width=2)
     for b in CATALOGS[cat].keys(): kb.insert(types.InlineKeyboardButton(b, callback_data=f"br_{cat}_{b}"))
@@ -186,7 +184,7 @@ async def process_cat(callback_query: types.CallbackQuery):
     await bot.edit_message_text("Выберите производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("br_"))
-async def process_brand(callback_query: types.CallbackQuery):
+async def process_brand_handler(callback_query: types.CallbackQuery):
     _, cat, brand = callback_query.data.split('_')
     kb = types.InlineKeyboardMarkup(row_width=1)
     for idx, m in enumerate(CATALOGS[cat][brand]): kb.add(types.InlineKeyboardButton(m, callback_data=f"mod_{cat}_{brand}_{idx}"))
@@ -195,7 +193,7 @@ async def process_brand(callback_query: types.CallbackQuery):
     await bot.edit_message_text(f"Модели {brand}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mod_"))
-async def process_model(callback_query: types.CallbackQuery):
+async def process_model_handler(callback_query: types.CallbackQuery):
     _, cat, brand, idx = callback_query.data.split('_')
     model_name = CATALOGS[cat][brand][int(idx)]
     uid = str(callback_query.from_user.id)
@@ -216,14 +214,14 @@ async def process_model(callback_query: types.CallbackQuery):
 
 # --- СВОЙ ВАРИАНТ ---
 @dp.callback_query_handler(lambda c: c.data.startswith("man_"))
-async def man_input_start(callback_query: types.CallbackQuery, state: FSMContext):
+async def man_input_start_handler(callback_query: types.CallbackQuery, state: FSMContext):
     cat = callback_query.data.split('_')[1]
     await state.update_data(manual_cat=cat)
     await FilterStates.waiting_for_manual_name.set()
     await bot.send_message(callback_query.from_user.id, "📝 <b>Введите название вашей системы:</b>", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.message_handler(state=FilterStates.waiting_for_manual_name)
-async def man_name_msg(message: types.Message, state: FSMContext):
+async def man_name_msg_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.update_data(manual_name=message.text, manual_idx=0, manual_ints={}, manual_comps=list(FILTER_CONFIGS[data['manual_cat']].keys()))
     await ask_man_step(message, state)
@@ -245,7 +243,7 @@ async def ask_man_step(message, state):
                          f"Введите число месяцев. Если ступени нет — введите 0:")
 
 @dp.message_handler(state=FilterStates.waiting_for_custom_interval)
-async def man_int_msg(message: types.Message, state: FSMContext):
+async def man_int_msg_handler(message: types.Message, state: FSMContext):
     if not message.text.isdigit(): return await message.answer("⚠️ Введите число.")
     data = await state.get_data()
     data['manual_ints'][data['manual_comps'][data['manual_idx']]] = int(message.text)
@@ -255,7 +253,7 @@ async def man_int_msg(message: types.Message, state: FSMContext):
 # --- ЗАМЕНА КАРТРИДЖЕЙ ---
 
 @dp.message_handler(lambda m: m.text == "📅 Заменил картридж")
-async def cmd_replace(message: types.Message):
+async def cmd_replace_handler(message: types.Message):
     uid = str(message.from_user.id)
     if uid not in users_db or not users_db[uid]: return await message.answer("Сначала добавьте фильтр.")
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -263,7 +261,7 @@ async def cmd_replace(message: types.Message):
     await message.answer("В какой системе произведена замена?", reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sr_"))
-async def sr_choice_cb(callback_query: types.CallbackQuery):
+async def sr_choice_cb_handler(callback_query: types.CallbackQuery):
     idx = int(callback_query.data.split('_')[1])
     f = users_db[str(callback_query.from_user.id)][idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -272,7 +270,7 @@ async def sr_choice_cb(callback_query: types.CallbackQuery):
     await bot.edit_message_text("Что именно заменили?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("opt_"))
-async def opt_cb(callback_query: types.CallbackQuery):
+async def opt_cb_handler(callback_query: types.CallbackQuery):
     _, code, idx = callback_query.data.split('_')
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📅 Сегодня", callback_data=f"dn_{code}_{idx}"),
@@ -280,7 +278,7 @@ async def opt_cb(callback_query: types.CallbackQuery):
     await bot.edit_message_text("Когда была замена?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dn_"))
-async def date_now_cb(callback_query: types.CallbackQuery):
+async def date_now_cb_handler(callback_query: types.CallbackQuery):
     _, code, idx = callback_query.data.split('_')
     uid = str(callback_query.from_user.id)
     name = FILTER_CONFIGS[users_db[uid][int(idx)]['category']][code]['name']
@@ -289,7 +287,7 @@ async def date_now_cb(callback_query: types.CallbackQuery):
     await bot.edit_message_text(f"✅ Замена {name} сохранена сегодня!", callback_query.message.chat.id, callback_query.message.message_id)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dm_"))
-async def date_manual_start(callback_query: types.CallbackQuery, state: FSMContext):
+async def date_manual_start_handler(callback_query: types.CallbackQuery, state: FSMContext):
     _, code, idx = callback_query.data.split('_')
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
@@ -298,7 +296,7 @@ async def date_manual_start(callback_query: types.CallbackQuery, state: FSMConte
     await bot.send_message(callback_query.from_user.id, msg)
 
 @dp.message_handler(state=FilterStates.waiting_for_date)
-async def process_manual_date(message: types.Message, state: FSMContext):
+async def process_manual_date_handler(message: types.Message, state: FSMContext):
     try:
         valid_date = datetime.strptime(message.text, "%d.%m.%Y").strftime("%d.%m.%Y")
         data = await state.get_data(); uid = str(message.from_user.id)
@@ -311,29 +309,29 @@ async def process_manual_date(message: types.Message, state: FSMContext):
 # --- НАСТРОЙКИ И FAQ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq")
-async def settings_faq(callback_query: types.CallbackQuery):
+async def settings_faq_handler(callback_query: types.CallbackQuery):
     faq_text = (
         "ℹ️ <b>СПРАВКА И СОВЕТЫ</b>\n" + "━" * 15 + "\n\n"
-        "📅 <b>Старые даты:</b> Если вы только начали пользоваться ботом, внесите даты последних замен через кнопку «Заменил картридж». Бот пересчитает остаток ресурса автоматически.\n\n"
+        "📅 <b>Старые даты:</b> Если вы только начали пользоваться ботом, внесите даты последних замен через кнопку «Заменил картридж». Бот пересчитает ресурс автоматически.\n\n"
         "☁️ <b>Ваши данные:</b> Все настройки синхронизируются с GitHub Gist. Вы не потеряете данные при обновлении бота или смене сервера.\n\n"
         "⏱ <b>Интервалы:</b> Вы можете менять сроки под свой расход воды. Если поставить 0, бот перестанет отслеживать эту ступень.\n\n"
         "🔴 <b>Статусы:</b>\n"
-        "🟢 — Ресурс > 30 дней\n"
-        "🟡 — Осталось меньше месяца\n"
+        "🟢 — Ресурс в норме\n"
+        "🟡 — Износ (осталось < 25% ресурса и < 30 дней)\n"
         "🔴 — Срок замены вышел\n\n"
-        "🛠 <b>Совет инженера:</b> При замене картриджей всегда промывайте колбы и проверяйте состояние резиновых прокладок. Рекомендуется менять прокладки раз в год."
+        "🛠 <b>Совет инженера:</b> При замене картриджей всегда промывайте колбы и проверяйте состояние прокладок."
     )
     await bot.edit_message_text(faq_text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_settings_kb())
 
 @dp.callback_query_handler(lambda c: c.data == "set_ints")
-async def settings_ints(callback_query: types.CallbackQuery):
+async def settings_ints_handler(callback_query: types.CallbackQuery):
     uid = str(callback_query.from_user.id)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(users_db.get(uid, [])): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"si_{i}"))
     await bot.edit_message_text("Изменить сроки для системы:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("si_"))
-async def si_cb(callback_query: types.CallbackQuery):
+async def si_cb_handler(callback_query: types.CallbackQuery):
     idx = int(callback_query.data.split('_')[1])
     f = users_db[str(callback_query.from_user.id)][idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -343,14 +341,14 @@ async def si_cb(callback_query: types.CallbackQuery):
     await bot.edit_message_text(f"Ступень {f['model']}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ei_"))
-async def ei_cb(callback_query: types.CallbackQuery, state: FSMContext):
+async def ei_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
     _, code, idx = callback_query.data.split('_')
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
     await bot.send_message(callback_query.from_user.id, "Введите новый интервал в месяцах (0 - отключить):")
 
 @dp.message_handler(state=FilterStates.waiting_for_interval_change)
-async def ei_msg(message: types.Message, state: FSMContext):
+async def ei_msg_handler(message: types.Message, state: FSMContext):
     if not message.text.isdigit(): return await message.answer("Число!")
     data = await state.get_data(); uid = str(message.from_user.id)
     users_db[uid][data['ei_idx']]['intervals'][data['ei_code']] = int(message.text)
@@ -358,38 +356,58 @@ async def ei_msg(message: types.Message, state: FSMContext):
     await message.answer("✅ Срок изменен!", reply_markup=get_main_menu())
 
 @dp.callback_query_handler(lambda c: c.data == "set_del")
-async def set_del_list(callback_query: types.CallbackQuery):
+async def set_del_list_handler(callback_query: types.CallbackQuery):
     uid = str(callback_query.from_user.id)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(users_db.get(uid, [])): kb.add(types.InlineKeyboardButton(f"🗑 {f['model']}", callback_data=f"del_{i}"))
     await bot.edit_message_text("Удалить систему:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("del_"))
-async def del_confirm(callback_query: types.CallbackQuery):
+async def del_confirm_handler(callback_query: types.CallbackQuery):
     idx, uid = int(callback_query.data.split('_')[1]), str(callback_query.from_user.id)
     name = users_db[uid].pop(idx)['model']
     await sync_gist("save")
     await bot.edit_message_text(f"✅ Удалено: {name}", callback_query.message.chat.id, callback_query.message.message_id)
 
 @dp.callback_query_handler(lambda c: c.data == "set_clear")
-async def set_clear_all(callback_query: types.CallbackQuery):
+async def set_clear_all_handler(callback_query: types.CallbackQuery):
     users_db[str(callback_query.from_user.id)] = []
     await sync_gist("save")
     await bot.edit_message_text("🧨 Профиль очищен.", callback_query.message.chat.id, callback_query.message.message_id)
 
 @dp.callback_query_handler(lambda c: c.data == "cancel")
-async def cancel_action(callback_query: types.CallbackQuery):
+async def cancel_action_handler(callback_query: types.CallbackQuery):
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_"))
-async def buy_links_cb(callback_query: types.CallbackQuery):
+async def buy_links_cb_handler(callback_query: types.CallbackQuery):
     idx = int(callback_query.data.split('_')[1])
     f = users_db[str(callback_query.from_user.id)][idx]
     q = quote(f"картриджи {f['model']}")
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("🛒 На Ozon", url=f"https://www.ozon.ru/search/?text={q}"),
            types.InlineKeyboardButton("🟣 На Wildberries", url=f"https://www.wildberries.ru/catalog/0/search.aspx?search={q}"))
-    await bot.send_message(callback_query.from_user.id, f"🛒 Рассходники для <b>{f['model']}</b>:", reply_markup=kb)
+    await bot.send_message(callback_query.from_user.id, f"🛒 Расходники для <b>{f['model']}</b>:", reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text == "📜 История")
+async def cmd_history_handler(message: types.Message):
+    uid = str(message.from_user.id)
+    if uid not in users_db or not users_db[uid]: return await message.answer("История пока пуста.")
+    res = "📜 <b>ИСТОРИЯ ОБСЛУЖИВАНИЯ:</b>\n\n"
+    for f in users_db[uid]:
+        res += f"🚰 <b>{f['model']}</b>:\n"
+        if not f['history']: res += "  ▫️ <i>Записей нет</i>\n"
+        else:
+            for h in f['history'][-5:]: res += f"  ▫️ {h['date']} — {h['item']}\n"
+    await message.answer(res)
+
+@dp.message_handler(lambda m: m.text == "🛒 Купить картриджи")
+async def buy_menu_handler(message: types.Message):
+    uid = str(message.from_user.id)
+    if uid not in users_db or not users_db[uid]: return await message.answer("Добавьте фильтр.")
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, f in enumerate(users_db[uid]): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"buy_{i}"))
+    await message.answer("Для какой системы ищем расходники?", reply_markup=kb)
 
 # --- ЗАПУСК ---
 async def start_webserver():
