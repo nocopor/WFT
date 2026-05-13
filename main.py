@@ -152,8 +152,15 @@ async def cmd_status(message: types.Message):
             percent = max(0, min(100, int((days_left / total_days) * 100)))
             
             icon = "🟢"
-            if days_left <= 30: icon = "🟡"; needs_buy = True
-            if days_left <= 0: icon = "🔴"; needs_buy = True
+# Если ресурс закончился или ушел в минус
+if days_left <= 0:
+    icon = "🔴"
+    needs_buy = True
+# Желтый включается, если осталось меньше 30 дней И ресурс меньше 25% 
+# (чтобы новые месячные фильтры не были желтыми сразу)
+elif days_left <= 30 and percent <= 25:
+    icon = "🟡"
+    needs_buy = True
             
             res += f"  ├ {icon} <b>{name}</b>\n"
             res += f"  └ {get_progress_bar(percent)} (~{days_left} дн.)\n"
