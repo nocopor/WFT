@@ -24,9 +24,7 @@ users_db = {}
 # --- БАЗА ДАННЫХ GIST ---
 async def sync_gist(action="load"):
     global users_db
-    if not GIST_ID or not GITHUB_TOKEN:
-        logging.warning("GIST переменные не настроены!")
-        return
+    if not GIST_ID or not GITHUB_TOKEN: return
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     url = f"https://api.github.com/gists/{GIST_ID}"
     async with aiohttp.ClientSession() as session:
@@ -40,8 +38,7 @@ async def sync_gist(action="load"):
             elif action == "save":
                 payload = {"files": {"filters_db.json": {"content": json.dumps(users_db, ensure_ascii=False, indent=2)}}}
                 await session.patch(url, headers=headers, json=payload)
-        except Exception as e:
-            logging.error(f"Gist Sync Error: {e}")
+        except Exception as e: logging.error(f"Gist Sync Error: {e}")
 
 # --- КАТАЛОГ СИСТЕМ ---
 CATALOGS = {
@@ -49,17 +46,25 @@ CATALOGS = {
         "Атолл": ["A-550", "A-575", "A-550m", "A-575m", "A-450"],
         "Барьер": ["Профи Осмо 100", "Профи Осмо 100 М", "Compact Osmo"],
         "Гейзер": ["Престиж", "Аллегро", "Престиж М", "Аллегро М"],
-        "Аквафор": ["DWM-101S Морион", "DWM-102S", "Осмо Про 50", "Осмо Про 50 М"]
+        "Аквафор": ["DWM-101S Морион", "DWM-102S", "Осмо Про 50"],
+        "Prio": ["Новая Вода Expert", "Expert Osmos MO530", "Expert Osmos MO600"],
+        "Raifil": ["Grando 5", "Grando 6", "Grando 7"]
     },
     "stage3": {
         "Атолл": ["Патриот", "D-31"],
         "Гейзер": ["Макс", "Стандарт", "БИО"],
-        "Аквафор": ["Кристалл Эко", "Трио", "Кристалл Н"]
+        "Аквафор": ["Кристалл Эко", "Трио", "Кристалл Н"],
+        "Барьер": ["Эксперт Стандарт", "Эксперт Жесткость", "Эксперт Комплекс"],
+        "Prio": ["Expert M300", "Expert M310", "Expert M410"],
+        "Xiaomi": ["Mi Water Purifier (3 stage)", "Millet Water Purifier"]
     },
     "flow": {
-        "Аквафор": ["Фаворит", "Модерн", "Викинг 10SL", "Викинг 10BB"],
-        "Гейзер": ["Тайфун 10SL", "Тайфун 10BB"],
-        "Джилекс": ["Колба 10SL", "Колба 10BB"]
+        "Аквафор": ["Фаворит", "Викинг 10SL", "Викинг 10BB"],
+        "Гейзер": ["Тайфун 10SL", "Тайфун 10BB", "Тайфун 20BB"],
+        "Барьер": ["Профи В1", "Профи В2", "Профи В3"],
+        "Джилекс": ["Колба 10SL", "Колба 10BB", "Колба 20BB"],
+        "Honeywell": ["FF06", "FK06", "F76S"],
+        "ITA Filter": ["ITA-01", "ITA-02", "ITA-03"]
     }
 }
 
@@ -83,12 +88,7 @@ class FilterStates(StatesGroup):
 bot = Bot(token=TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-def get_progress_bar(percent):
-    filled = int(percent / 10)
-    bar = "█" * filled + "░" * (10 - filled)
-    return f"[{bar}] {percent}%"
-
+# --- КЛАВИАТУРЫ ---
 def get_main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 Статус", "➕ Добавить фильтр")
@@ -96,11 +96,15 @@ def get_main_menu():
     kb.row("📜 История", "⚙️ Настройки")
     return kb
 
+def get_back_btn(callback_data):
+    return types.InlineKeyboardButton("⬅️ Назад", callback_data=callback_data)
+
 def get_categories_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("💧 Обратный осмос", callback_data="cat_osmos"),
            types.InlineKeyboardButton("🧪 3-ступенчатый", callback_data="cat_stage3"),
-           types.InlineKeyboardButton("🚰 Магистральный / Проточный", callback_data="cat_flow"))
+           types.InlineKeyboardButton("🚰 Магистральный / Проточный", callback_data="cat_flow"),
+           get_back_btn("main_menu"))
     return kb
 
 def get_settings_kb():
@@ -109,152 +113,94 @@ def get_settings_kb():
            types.InlineKeyboardButton("⏱ Изменить интервалы", callback_data="set_ints"),
            types.InlineKeyboardButton("🗑 Удалить систему", callback_data="set_del"),
            types.InlineKeyboardButton("🧨 Очистить профиль", callback_data="set_clear"),
-           types.InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
+           get_back_btn("main_menu"))
     return kb
 
-# --- ОБРАБОТЧИКИ ГЛАВНОГО МЕНЮ ---
+# --- ОСНОВНЫЕ КОМАНДЫ ---
 
 @dp.message_handler(commands=['start'], state='*')
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.finish()
-    await message.answer("💧 <b>Сервис контроля фильтров v11.7</b>\nВыберите действие в меню.", reply_markup=get_main_menu())
+    msg = ("Привет! Рад тебя видеть. Я помогу следить за твоими фильтрами, чтобы вода дома всегда была чистой. "
+           "Давай начнем — добавь свою первую систему или проверь статус существующих.")
+    await message.answer(msg, reply_markup=get_main_menu())
+    await message.answer("Выберите тип вашей системы для добавления:", reply_markup=get_categories_kb())
 
 @dp.message_handler(lambda m: m.text == "➕ Добавить фильтр", state='*')
 async def add_filter_start(message: types.Message, state: FSMContext):
     await state.finish()
-    await message.answer("Выберите тип вашей системы:", reply_markup=get_categories_kb())
+    await message.answer("Какой тип фильтра добавляем?", reply_markup=get_categories_kb())
 
 @dp.message_handler(lambda m: m.text == "⚙️ Настройки", state='*')
-async def cmd_settings_handler(message: types.Message, state: FSMContext):
+async def cmd_settings(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer("⚙️ <b>Меню настроек:</b>", reply_markup=get_settings_kb())
 
-@dp.message_handler(lambda m: m.text == "📜 История", state='*')
-async def cmd_history_handler(message: types.Message, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data == "main_menu", state='*')
+async def back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
-    uid = str(message.from_user.id)
-    if uid not in users_db or not users_db[uid]: 
-        return await message.answer("История пока пуста.")
-    res = "📜 <b>ИСТОРИЯ ОБСЛУЖИВАНИЯ:</b>\n\n"
-    for f in users_db[uid]:
-        res += f"🚰 <b>{f['model']}</b>:\n"
-        if not f['history']: res += "  ▫️ <i>Записей нет</i>\n"
-        else:
-            for h in f['history'][-5:]: res += f"  ▫️ {h['date']} — {h['item']}\n"
-        res += "\n"
-    await message.answer(res)
+    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    await bot.send_message(callback_query.from_user.id, "Вы вернулись в главное меню.", reply_markup=get_main_menu())
 
-@dp.message_handler(lambda m: m.text == "🛒 Купить картриджи", state='*')
-async def buy_menu_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    uid = str(message.from_user.id)
-    if uid not in users_db or not users_db[uid]: 
-        return await message.answer("Сначала добавьте фильтр.")
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, f in enumerate(users_db[uid]): 
-        kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"buy_{i}"))
-    await message.answer("Для какой системы ищем расходники?", reply_markup=kb)
-
-@dp.message_handler(lambda m: m.text == "📊 Статус", state='*')
-async def cmd_status_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    uid = str(message.from_user.id)
-    if uid not in users_db or not users_db[uid]:
-        return await message.answer("У вас нет добавленных систем.")
-    
-    res = "📊 <b>ТЕКУЩИЙ МОНИТОРИНГ:</b>\n" + "━" * 15 + "\n\n"
-    now = datetime.now()
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    
-    for i, f in enumerate(users_db[uid]):
-        res += f"🚰 <b>{f['model']}</b>\n"
-        needs_buy = False
-        for code, interval in f['intervals'].items():
-            if interval == 0: continue
-            name = FILTER_CONFIGS[f['category']][code]['name']
-            last_date_str = next((h['date'] for h in reversed(f['history']) if h['item'] == name), f['created_at'])
-            last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
-            
-            total_days = interval * 30.4
-            elapsed_days = (now - last_date).days
-            days_left = int(total_days - elapsed_days)
-            percent = max(0, min(100, int((days_left / total_days) * 100)))
-            
-            icon = "🟢"
-            if days_left <= 0:
-                icon = "🔴"
-                needs_buy = True
-            elif days_left <= 30 and percent <= 25:
-                icon = "🟡"
-                needs_buy = True
-            
-            res += f"  ├ {icon} <b>{name}</b>\n"
-            res += f"  └ {get_progress_bar(percent)} (~{days_left} дн.)\n"
-        
-        if needs_buy:
-            kb.add(types.InlineKeyboardButton(f"🛒 Купить для {f['model'][:15]}...", callback_data=f"buy_{i}"))
-        res += "\n"
-    await message.answer(res, reply_markup=kb if kb.inline_keyboard else None)
-
-# --- НАВИГАЦИЯ КАТАЛОГА ---
-
-@dp.callback_query_handler(lambda c: c.data == "back_cats", state='*')
-async def back_to_cats_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    await bot.edit_message_text("Выберите тип системы:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_categories_kb())
+# --- КАТАЛОГ СИСТЕМ ---
 
 @dp.callback_query_handler(lambda c: c.data.startswith("cat_"), state='*')
-async def process_cat_handler(callback_query: types.CallbackQuery, state: FSMContext):
+async def process_cat(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
     cat = callback_query.data.split('_')[1]
     kb = types.InlineKeyboardMarkup(row_width=2)
     for b in CATALOGS[cat].keys(): kb.insert(types.InlineKeyboardButton(b, callback_data=f"br_{cat}_{b}"))
-    kb.add(types.InlineKeyboardButton("📝 Свой вариант", callback_data=f"man_{cat}"),
-           types.InlineKeyboardButton("⬅️ Назад", callback_data="back_cats"))
+    kb.row(types.InlineKeyboardButton("📝 Свой вариант", callback_data=f"man_{cat}"))
+    kb.row(get_back_btn("back_cats"))
     await bot.edit_message_text("Выберите производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
-@dp.callback_query_handler(lambda c: c.data.startswith("br_"), state='*')
-async def process_brand_handler(callback_query: types.CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data == "back_cats", state='*')
+async def back_to_cats(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
+    await bot.edit_message_text("Выберите тип системы:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_categories_kb())
+
+@dp.callback_query_handler(lambda c: c.data.startswith("br_"), state='*')
+async def process_brand(callback_query: types.CallbackQuery, state: FSMContext):
     _, cat, brand = callback_query.data.split('_')
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for idx, m in enumerate(CATALOGS[cat][brand]): kb.add(types.InlineKeyboardButton(m, callback_data=f"mod_{cat}_{brand}_{idx}"))
-    kb.add(types.InlineKeyboardButton("📝 Свой вариант", callback_data=f"man_{cat}"),
-           types.InlineKeyboardButton("⬅️ Назад", callback_data=f"cat_{cat}"))
+    for idx, m in enumerate(CATALOGS[cat][brand]): 
+        kb.add(types.InlineKeyboardButton(m, callback_data=f"mod_{cat}_{brand}_{idx}"))
+    kb.add(get_back_btn(f"cat_{cat}"))
     await bot.edit_message_text(f"Модели {brand}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mod_"), state='*')
-async def process_model_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
     _, cat, brand, idx = callback_query.data.split('_')
     model_name = CATALOGS[cat][brand][int(idx)]
     uid = str(callback_query.from_user.id)
-    
     intervals = {code: data['interval'] for code, data in FILTER_CONFIGS[cat].items()}
     if cat == "osmos" and not any(x in model_name.lower() for x in ["m", "мин", "морион"]): intervals["min"] = 0
-    
     if uid not in users_db: users_db[uid] = []
     users_db[uid].append({"model": f"{brand} {model_name}", "category": cat, "intervals": intervals, "history": [], "created_at": datetime.now().strftime("%d.%m.%Y")})
     await sync_gist("save")
-    
-    msg = (f"✅ <b>{brand} {model_name}</b> добавлена!\n\n"
-           f"📅 По умолчанию отсчет ресурса начат с сегодняшнего дня.\n\n"
-           f"❓ <b>Меняли картриджи раньше?</b>\n"
-           f"Нажмите кнопку «📅 Заменил картридж», выберите ступень и введите реальную дату прошлой замены — "
-           f"я мгновенно пересчитаю актуальный статус!")
+    msg = (f"✅ <b>{brand} {model_name}</b> успешно добавлена!\n\n"
+           "📅 Рекомендуемые сроки замены уже установлены. Если у вас плохая вода или высокий расход, "
+           "вы можете изменить их в разделе «⚙️ Настройки».")
     await bot.send_message(uid, msg, reply_markup=get_main_menu())
 
-# --- СВОЙ ВАРИАНТ ---
+# --- РУЧНОЙ ВВОД (СВОЙ ВАРИАНТ) ---
+
 @dp.callback_query_handler(lambda c: c.data.startswith("man_"), state='*')
-async def man_input_start_handler(callback_query: types.CallbackQuery, state: FSMContext):
+async def man_input_start(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
     cat = callback_query.data.split('_')[1]
     await state.update_data(manual_cat=cat)
     await FilterStates.waiting_for_manual_name.set()
-    await bot.send_message(callback_query.from_user.id, "📝 <b>Введите название вашей системы:</b>", reply_markup=types.ReplyKeyboardRemove())
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True); kb.add("⬅️ Назад в меню")
+    await bot.send_message(callback_query.from_user.id, "📝 <b>Введите название вашей системы:</b>", reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text == "⬅️ Назад в меню", state='*')
+async def man_cancel(message: types.Message, state: FSMContext):
+    await state.finish()
+    await message.answer("Действие отменено.", reply_markup=get_main_menu())
 
 @dp.message_handler(state=FilterStates.waiting_for_manual_name)
-async def man_name_msg_handler(message: types.Message, state: FSMContext):
+async def man_name_msg(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.update_data(manual_name=message.text, manual_idx=0, manual_ints={}, manual_comps=list(FILTER_CONFIGS[data['manual_cat']].keys()))
     await ask_man_step(message, state)
@@ -272,168 +218,200 @@ async def ask_man_step(message, state):
     comp_info = FILTER_CONFIGS[cat][data['manual_comps'][idx]]
     await FilterStates.waiting_for_custom_interval.set()
     await message.answer(f"⏱ <b>Ступень: {comp_info['name']}</b>\n"
-                         f"💡 Рекомендуемый срок: {comp_info['interval']} мес.\n\n"
-                         f"Введите число месяцев. Если ступени нет — введите 0:")
+                         f"💡 Обычно служит: {comp_info['interval']} мес.\n"
+                         "Введите ваш срок службы в месяцах. Если ступени нет — введите 0:")
 
 @dp.message_handler(state=FilterStates.waiting_for_custom_interval)
-async def man_int_msg_handler(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("⚠️ Введите число.")
+async def man_int_msg(message: types.Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("⚠️ Введите только число.")
     data = await state.get_data()
     data['manual_ints'][data['manual_comps'][data['manual_idx']]] = int(message.text)
     await state.update_data(manual_ints=data['manual_ints'], manual_idx=data['manual_idx'] + 1)
     await ask_man_step(message, state)
 
-# --- ЗАМЕНА КАРТРИДЖЕЙ ---
+# --- СТАТУС, ИСТОРИЯ, КУПИТЬ (С НАВИГАЦИЕЙ) ---
+
+@dp.message_handler(lambda m: m.text == "📊 Статус", state='*')
+async def cmd_status(message: types.Message, state: FSMContext):
+    await state.finish()
+    uid = str(message.from_user.id)
+    if uid not in users_db or not users_db[uid]: return await message.answer("У вас нет добавленных систем.")
+    res = "📊 <b>ТЕКУЩИЙ СТАТУС:</b>\n\n"; now = datetime.now(); kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, f in enumerate(users_db[uid]):
+        res += f"🚰 <b>{f['model']}</b>\n"
+        needs_buy = False
+        for code, interval in f['intervals'].items():
+            if interval == 0: continue
+            name = FILTER_CONFIGS[f['category']][code]['name']
+            last_date_str = next((h['date'] for h in reversed(f['history']) if h['item'] == name), f['created_at'])
+            last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
+            total_days = interval * 30.4; elapsed = (now - last_date).days
+            days_left = int(total_days - elapsed); pct = max(0, min(100, int((days_left / total_days) * 100)))
+            icon = "🟢"
+            if days_left <= 0: icon = "🔴"; needs_buy = True
+            elif days_left <= 30 and pct <= 25: icon = "🟡"; needs_buy = True
+            res += f"  ├ {icon} {name}\n  └ {'█'*(pct//10)+'░'*(10-pct//10)} {pct}% ({days_left} дн.)\n"
+        if needs_buy: kb.add(types.InlineKeyboardButton(f"🛒 Купить для {f['model'][:15]}...", callback_data=f"buy_{i}"))
+        res += "\n"
+    await message.answer(res, reply_markup=kb if kb.inline_keyboard else None)
+
+@dp.message_handler(lambda m: m.text == "🛒 Купить картриджи", state='*')
+async def cmd_buy(message: types.Message, state: FSMContext):
+    await state.finish()
+    uid = str(message.from_user.id)
+    if uid not in users_db or not users_db[uid]: return await message.answer("Сначала добавьте фильтр.")
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, f in enumerate(users_db[uid]): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"buy_{i}"))
+    kb.add(get_back_btn("main_menu"))
+    await message.answer("Для какой системы ищем расходники?", reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text == "📜 История", state='*')
+async def cmd_history(message: types.Message, state: FSMContext):
+    await state.finish(); uid = str(message.from_user.id)
+    if uid not in users_db or not users_db[uid]: return await message.answer("История пуста.")
+    res = "📜 <b>ИСТОРИЯ ОБСЛУЖИВАНИЯ:</b>\n\n"
+    for f in users_db[uid]:
+        res += f"🚰 <b>{f['model']}</b>:\n"
+        if not f['history']: res += "  ▫️ <i>Записей нет</i>\n"
+        else:
+            for h in f['history'][-5:]: res += f"  ▫️ {h['date']} — {h['item']}\n"
+    await message.answer(res)
 
 @dp.message_handler(lambda m: m.text == "📅 Заменил картридж", state='*')
-async def cmd_replace_handler(message: types.Message, state: FSMContext):
+async def cmd_replace(message: types.Message, state: FSMContext):
     await state.finish()
     uid = str(message.from_user.id)
     if uid not in users_db or not users_db[uid]: return await message.answer("Сначала добавьте фильтр.")
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(users_db[uid]): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"sr_{i}"))
+    kb.add(get_back_btn("main_menu"))
     await message.answer("В какой системе произведена замена?", reply_markup=kb)
 
+# --- ПОДМЕНЮ ЗАМЕНЫ ---
+
 @dp.callback_query_handler(lambda c: c.data.startswith("sr_"), state='*')
-async def sr_choice_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def sr_choice(callback_query: types.CallbackQuery):
     idx = int(callback_query.data.split('_')[1])
     f = users_db[str(callback_query.from_user.id)][idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, val in f['intervals'].items():
         if val > 0: kb.add(types.InlineKeyboardButton(FILTER_CONFIGS[f['category']][code]['name'], callback_data=f"opt_{code}_{idx}"))
+    kb.add(get_back_btn("main_menu"))
     await bot.edit_message_text("Что именно заменили?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("opt_"), state='*')
-async def opt_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def opt_choice(callback_query: types.CallbackQuery):
     _, code, idx = callback_query.data.split('_')
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📅 Сегодня", callback_data=f"dn_{code}_{idx}"),
-           types.InlineKeyboardButton("✍️ Ввести дату вручную", callback_data=f"dm_{code}_{idx}"))
+           types.InlineKeyboardButton("✍️ Ввести дату вручную", callback_data=f"dm_{code}_{idx}"),
+           get_back_btn(f"sr_{idx}"))
     await bot.edit_message_text("Когда была замена?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dn_"), state='*')
-async def date_now_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    _, code, idx = callback_query.data.split('_')
-    uid = str(callback_query.from_user.id)
+async def date_today(callback_query: types.CallbackQuery):
+    _, code, idx = callback_query.data.split('_'); uid = str(callback_query.from_user.id)
     name = FILTER_CONFIGS[users_db[uid][int(idx)]['category']][code]['name']
     users_db[uid][int(idx)]['history'].append({"date": datetime.now().strftime("%d.%m.%Y"), "item": name})
     await sync_gist("save")
     await bot.edit_message_text(f"✅ Замена {name} сохранена сегодня!", callback_query.message.chat.id, callback_query.message.message_id)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dm_"), state='*')
-async def date_manual_start_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext):
     _, code, idx = callback_query.data.split('_')
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
-    msg = ("✍️ <b>Введите дату замены в формате ДД.ММ.ГГГГ</b>\n(например: 15.01.2024)\n\n"
-           "💡 <i>Вы можете вводить старые даты — бот пересчитает ресурс.</i>")
-    await bot.send_message(callback_query.from_user.id, msg)
+    await bot.send_message(callback_query.from_user.id, "✍️ <b>Введите дату замены (ДД.ММ.ГГГГ):</b>\n\n💡 Можно вводить старые даты!")
 
 @dp.message_handler(state=FilterStates.waiting_for_date)
-async def process_manual_date_handler(message: types.Message, state: FSMContext):
+async def date_man_msg(message: types.Message, state: FSMContext):
     try:
-        valid_date = datetime.strptime(message.text, "%d.%m.%Y").strftime("%d.%m.%Y")
+        valid = datetime.strptime(message.text, "%d.%m.%Y").strftime("%d.%m.%Y")
         data = await state.get_data(); uid = str(message.from_user.id)
         name = FILTER_CONFIGS[users_db[uid][data['dm_idx']]['category']][data['dm_code']]['name']
-        users_db[uid][data['dm_idx']]['history'].append({"date": valid_date, "item": name})
+        users_db[uid][data['dm_idx']]['history'].append({"date": valid, "item": name})
         await sync_gist("save"); await state.finish()
-        await message.answer(f"✅ Сохранено на дату {valid_date}!", reply_markup=get_main_menu())
-    except: await message.answer("⚠️ Введите дату как ДД.ММ.ГГГГ")
+        await message.answer(f"✅ Сохранено на {valid}!", reply_markup=get_main_menu())
+    except: await message.answer("⚠️ Ошибка! Формат: ДД.ММ.ГГГГ")
 
-# --- НАСТРОЙКИ И FAQ ---
+# --- НАСТРОЙКИ, FAQ И УДАЛЕНИЕ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
-async def settings_faq_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def set_faq(callback_query: types.CallbackQuery):
     faq_text = (
-        "ℹ️ <b>СПРАВКА И СОВЕТЫ</b>\n" + "━" * 15 + "\n\n"
-        "📅 <b>Старые даты:</b> Внесите даты последних замен через кнопку «Заменил картридж». Бот пересчитает ресурс.\n\n"
-        "☁️ <b>Ваши данные:</b> Синхронизируются с GitHub Gist. Вы не потеряете данные.\n\n"
-        "⏱ <b>Интервалы:</b> Можно менять в настройках. 0 - отключить ступень.\n\n"
-        "🔴 <b>Статусы:</b>\n"
-        "🟢 — Ресурс в норме\n"
-        "🟡 — Износ (осталось < 25% ресурса и < 30 дней)\n"
-        "🔴 — Срок замены вышел"
+        "ℹ️ <b>СПРАВКА</b>\n\n"
+        "📅 <b>Прошлые замены:</b> Чтобы бот начал считать корректно, внесите дату последней замены через «Заменил картридж» -> «Вручную».\n\n"
+        "☁️ <b>Данные:</b> Все хранится в облаке Gist, ваши записи не пропадут.\n\n"
+        "⏱ <b>Интервалы:</b> В настройках можно изменить срок службы каждой ступени.\n\n"
+        "🟢 🟢 - Норма, 🟡 - Скоро замена, 🔴 - Срок вышел."
     )
     await bot.edit_message_text(faq_text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_settings_kb())
 
 @dp.callback_query_handler(lambda c: c.data == "set_ints", state='*')
-async def settings_ints_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def set_ints_list(callback_query: types.CallbackQuery):
     uid = str(callback_query.from_user.id)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(users_db.get(uid, [])): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"si_{i}"))
-    await bot.edit_message_text("Изменить сроки для системы:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    kb.add(get_back_btn("main_menu"))
+    await bot.edit_message_text("Изменить сроки для:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("si_"), state='*')
-async def si_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def si_choice(callback_query: types.CallbackQuery):
     idx = int(callback_query.data.split('_')[1])
     f = users_db[str(callback_query.from_user.id)][idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, val in f['intervals'].items():
-        name = FILTER_CONFIGS[f['category']][code]['name']
-        kb.add(types.InlineKeyboardButton(f"{name} ({val} мес)", callback_data=f"ei_{code}_{idx}"))
+        kb.add(types.InlineKeyboardButton(f"{FILTER_CONFIGS[f['category']][code]['name']} ({val} мес)", callback_data=f"ei_{code}_{idx}"))
+    kb.add(get_back_btn("set_ints"))
     await bot.edit_message_text(f"Ступень {f['model']}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ei_"), state='*')
-async def ei_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
     _, code, idx = callback_query.data.split('_')
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
-    await bot.send_message(callback_query.from_user.id, "Введите новый интервал в месяцах (0 - отключить):")
+    await bot.send_message(callback_query.from_user.id, "Введите срок в месяцах (0 - отключить):")
 
 @dp.message_handler(state=FilterStates.waiting_for_interval_change)
-async def ei_msg_handler(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Число!")
+async def ei_msg(message: types.Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Введите число.")
     data = await state.get_data(); uid = str(message.from_user.id)
     users_db[uid][data['ei_idx']]['intervals'][data['ei_code']] = int(message.text)
     await sync_gist("save"); await state.finish()
     await message.answer("✅ Срок изменен!", reply_markup=get_main_menu())
 
 @dp.callback_query_handler(lambda c: c.data == "set_del", state='*')
-async def set_del_list_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def set_del_list(callback_query: types.CallbackQuery):
     uid = str(callback_query.from_user.id)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(users_db.get(uid, [])): kb.add(types.InlineKeyboardButton(f"🗑 {f['model']}", callback_data=f"del_{i}"))
+    kb.add(get_back_btn("main_menu"))
     await bot.edit_message_text("Удалить систему:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("del_"), state='*')
-async def del_confirm_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
+async def del_confirm(callback_query: types.CallbackQuery):
     idx, uid = int(callback_query.data.split('_')[1]), str(callback_query.from_user.id)
-    name = users_db[uid].pop(idx)['model']
-    await sync_gist("save")
-    await bot.edit_message_text(f"✅ Удалено: {name}", callback_query.message.chat.id, callback_query.message.message_id)
+    name = users_db[uid].pop(idx)['model']; await sync_gist("save")
+    await bot.edit_message_text(f"✅ Удалено: {name}", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_settings_kb())
 
 @dp.callback_query_handler(lambda c: c.data == "set_clear", state='*')
-async def set_clear_all_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    users_db[str(callback_query.from_user.id)] = []
-    await sync_gist("save")
-    await bot.edit_message_text("🧨 Профиль очищен.", callback_query.message.chat.id, callback_query.message.message_id)
-
-@dp.callback_query_handler(lambda c: c.data == "cancel", state='*')
-async def cancel_action_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+async def set_clear(callback_query: types.CallbackQuery):
+    users_db[str(callback_query.from_user.id)] = []; await sync_gist("save")
+    await bot.edit_message_text("🧨 Профиль очищен.", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_settings_kb())
 
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_"), state='*')
-async def buy_links_cb_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish()
-    idx = int(callback_query.data.split('_')[1])
-    f = users_db[str(callback_query.from_user.id)][idx]
-    q = quote(f"картриджи {f['model']}")
-    kb = types.InlineKeyboardMarkup(row_width=1)
+async def buy_links(callback_query: types.CallbackQuery):
+    idx = int(callback_query.data.split('_')[1]); f = users_db[str(callback_query.from_user.id)][idx]
+    q = quote(f"картриджи {f['model']}"); kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("🛒 На Ozon", url=f"https://www.ozon.ru/search/?text={q}"),
-           types.InlineKeyboardButton("🟣 На Wildberries", url=f"https://www.wildberries.ru/catalog/0/search.aspx?search={q}"))
+           types.InlineKeyboardButton("🟣 Wildberries", url=f"https://www.wildberries.ru/catalog/0/search.aspx?search={q}"),
+           get_back_btn("main_menu"))
     await bot.send_message(callback_query.from_user.id, f"🛒 Расходники для <b>{f['model']}</b>:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "cancel", state='*')
+async def cancel_action(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
 
 # --- ЗАПУСК ---
 async def start_webserver():
