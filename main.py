@@ -39,14 +39,15 @@ async def sync_gist(action="load"):
                         data = await resp.json()
                         content = data['files']['filters_db.json']['content']
                         users_db = json.loads(content)
-                        logging.info("База загружена")
+                        logging.info("База загружена из облака")
             elif action == "save":
                 payload = {"files": {"filters_db.json": {"content": json.dumps(users_db, ensure_ascii=False, indent=2)}}}
                 await session.patch(url, headers=headers, json=payload)
+                logging.info("База синхронизирована с Gist")
         except Exception as e:
             logging.error(f"Gist Error: {e}")
 
-# --- КАТАЛОГ ---
+# --- КАТАЛОГ (ВСЕ КАТЕГОРИИ ВОССТАНОВЛЕНЫ) ---
 CATALOGS = {
     "osmos": {
         "Атолл": ["A-550", "A-575", "A-550m", "A-575m", "A-450"],
@@ -58,6 +59,12 @@ CATALOGS = {
         "Атолл": ["Патриот", "D-31"],
         "Гейзер": ["Макс", "Стандарт", "БИО"],
         "Аквафор": ["Кристалл Эко", "Трио", "Кристалл Н"]
+    },
+    "flow": {
+        "Аквафор": ["Фаворит", "Модерн", "Викинг 10SL", "Викинг 10BB"],
+        "Гейзер": ["Тайфун 10SL", "Тайфун 10BB", "Тайфун 20BB"],
+        "Барьер": ["In-Line Механика", "In-Line Уголь"],
+        "Джилекс": ["Колба 10SL", "Колба 10BB", "Колба 20BB"]
     }
 }
 
@@ -68,12 +75,9 @@ FILTER_CONFIGS = {
         "post": {"name": "Постфильтр", "interval": 12},
         "min": {"name": "Минерализатор", "interval": 12}
     },
-    "stage3": {"set": {"name": "Комплект картриджей", "interval": 12}}
+    "stage3": {"set": {"name": "Комплект картриджей", "interval": 12}},
+    "flow": {"cart": {"name": "Сменный модуль", "interval": 6}}
 }
-
-class FilterStates(StatesGroup):
-    waiting_for_date = State()
-    waiting_for_interval = State()
 
 bot = Bot(token=TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=MemoryStorage())
@@ -88,8 +92,11 @@ def get_main_menu():
 
 def get_categories_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("💧 Обратный осмос", callback_data="cat_osmos"),
-           types.InlineKeyboardButton("🧪 3-ступенчатый", callback_data="cat_stage3"))
+    kb.add(
+        types.InlineKeyboardButton("💧 Обратный осмос", callback_data="cat_osmos"),
+        types.InlineKeyboardButton("🧪 3-ступенчатый (под мойку)", callback_data="cat_stage3"),
+        types.InlineKeyboardButton("🚰 Магистральный / Проточный", callback_data="cat_flow")
+    )
     return kb
 
 def get_brands_kb(cat_key):
@@ -106,30 +113,12 @@ def get_models_kb(cat_key, brand_key):
     kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"cat_{cat_key}"))
     return kb
 
-def get_replacement_kb(uid, f_idx):
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    f = users_db[uid][f_idx]
-    if f['category'] == "osmos" and f['intervals'].get('pre', 0) > 0:
-        kb.add(types.InlineKeyboardButton("🔄 ЗАМЕНИТЬ КОМПЛЕКТ (1-3)", callback_data=f"repall_{f_idx}"))
-    for code, interval in f['intervals'].items():
-        if interval > 0:
-            name = FILTER_CONFIGS[f['category']][code]['name']
-            kb.add(types.InlineKeyboardButton(f"⚙️ {name}", callback_data=f"rep_{code}_{f_idx}"))
-    return kb
-
-def get_user_filters_kb(uid, prefix):
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, f in enumerate(users_db.get(uid, [])):
-        kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"{prefix}_{i}"))
-    kb.add(types.InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
-    return kb
-
-# --- ОБРАБОТЧИКИ КНОПОК ---
+# --- ОБРАБОТЧИКИ ---
 
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    await message.answer("💧 Сервис контроля фильтров запущен!", reply_markup=get_main_menu())
-    await message.answer("Выберите тип системы:", reply_markup=get_categories_kb())
+    await message.answer("💧 Сервис контроля фильтров готов!", reply_markup=get_main_menu())
+    await message.answer("Какую систему добавим в профиль?", reply_markup=get_categories_kb())
 
 @dp.message_handler(lambda m: m.text == "➕ Добавить фильтр")
 async def add_filter_start(message: types.Message):
@@ -156,19 +145,22 @@ async def process_model(callback_query: types.CallbackQuery):
     uid = str(callback_query.from_user.id)
     
     intervals = {code: data['interval'] for code, data in FILTER_CONFIGS[cat].items()}
-    # Логика минерализатора для Осмоса
+    
+    # Авто-отключение минерализатора для простых осмосов
     if cat == "osmos" and not any(x in model_name.lower() for x in ["m", "мин", "морион"]):
         intervals["min"] = 0
 
     if uid not in users_db: users_db[uid] = []
     users_db[uid].append({
-        "model": f"{brand} {model_name}", "category": cat, "intervals": intervals,
-        "history": [], "created_at": datetime.now().strftime("%d.%m.%Y")
+        "model": f"{brand} {model_name}", 
+        "category": cat, 
+        "intervals": intervals,
+        "history": [], 
+        "created_at": datetime.now().strftime("%d.%m.%Y")
     })
     
     await sync_gist("save")
-    await bot.answer_callback_query(callback_query.id, "Система добавлена!")
-    await bot.send_message(uid, f"✅ <b>{brand} {model_name}</b> добавлена!", reply_markup=get_main_menu())
+    await bot.send_message(uid, f"✅ <b>{brand} {model_name}</b> успешно добавлена!", reply_markup=get_main_menu())
 
 @dp.message_handler(lambda m: m.text == "📊 Статус")
 async def cmd_status(message: types.Message):
@@ -176,7 +168,7 @@ async def cmd_status(message: types.Message):
     if uid not in users_db or not users_db[uid]:
         return await message.answer("У вас нет фильтров. Нажмите «➕ Добавить фильтр»")
     
-    res = "📊 <b>Статус ваших систем:</b>\n\n"
+    res = "📊 <b>ТЕКУЩИЙ СТАТУС:</b>\n\n"
     now = datetime.now()
     for f in users_db[uid]:
         res += f"🚰 <b>{f['model']}</b>\n"
@@ -191,25 +183,10 @@ async def cmd_status(message: types.Message):
         res += "\n"
     await message.answer(res)
 
-@dp.message_handler(lambda m: m.text == "📅 Заменил картридж")
-async def cmd_replace(message: types.Message):
-    uid = str(message.from_user.id)
-    if uid not in users_db: return await message.answer("Сначала добавьте фильтр.")
-    await message.answer("Выберите систему:", reply_markup=get_user_filters_kb(uid, "selrep"))
-
-@dp.callback_query_handler(lambda c: c.data.startswith("selrep_"))
-async def process_selrep(callback_query: types.CallbackQuery):
-    f_idx = int(callback_query.data.split('_')[1])
-    await bot.edit_message_text("Что именно вы заменили?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=get_replacement_kb(str(callback_query.from_user.id), f_idx))
-
-@dp.callback_query_handler(lambda c: c.data == "cancel")
-async def process_cancel(callback_query: types.CallbackQuery):
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-
-# --- ЗАПУСК ---
+# --- ВЕБ-СЕРВЕР И ЗАПУСК ---
 async def start_webserver():
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Bot Alive"))
+    app.router.add_get("/", lambda r: web.Response(text="Bot is online"))
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000))).start()
