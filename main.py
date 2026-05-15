@@ -24,9 +24,9 @@ users_db = {}
 # --- БАЗА АВТО-НАЗВАНИЙ ПО МОДЕЛЯМ ---
 AUTO_NAMES = {
     "Атолл A-550": {"pre": "Набор №202", "mem": "Мембрана 50 GPD", "post": "Постфильтр Atoll"},
-    "Атолл A-550m": {"pre": "Набор №202", "mem": "Мембрана 50 GPD", "min": "Минерализатор Atoll"}, # Без постфильтра
+    "Атолл A-550m": {"pre": "Набор №202", "mem": "Мембрана 50 GPD", "min": "Минерализатор Atoll"}, 
     "Атолл A-575": {"pre": "Набор №203", "mem": "Мембрана 75 GPD", "post": "Постфильтр Atoll"},
-    "Атолл A-575m": {"pre": "Набор №203", "mem": "Мембрана 75 GPD", "min": "Минерализатор Atoll"}, # Без постфильтра
+    "Атолл A-575m": {"pre": "Набор №203", "mem": "Мембрана 75 GPD", "min": "Минерализатор Atoll"}, 
     "Аквафор DWM-101S Морион": {"pre": "Модули К5 и К2", "mem": "Мембрана КО-50S", "min": "Модуль К7М"},
     "Аквафор DWM-102S": {"pre": "Модули К5 и К2", "mem": "Мембрана КО-100S", "min": "Модуль К7М"},
     "Гейзер Престиж": {"pre": "Набор №6", "mem": "Мембрана Гейзер 50 GPD", "post": "Постфильтр Т33"},
@@ -161,7 +161,15 @@ async def cmd_status(message: types.Message, state: FSMContext):
         for code, interval in f['intervals'].items():
             if interval == 0: continue
             name = get_item_name(f, code)
-            last_date_str = next((h['date'] for h in reversed(f['history']) if h['item'] not in ["Начало обслуживания", "Система добавлена"]), f['created_at'])
+            
+            # ИСПРАВЛЕНО: Индивидуальный точечный поиск даты последней замены для конкретного картриджа
+            last_date_str = f['created_at']
+            for h in reversed(f['history']):
+                if h.get('code') == code or h['item'] == name or h['item'] == AUTO_NAMES.get(f['model'], {}).get(code) or h['item'] == FILTER_CONFIGS[f['category']].get(code, {}).get('name'):
+                    if h['date'] != "Картриджи новые":
+                        last_date_str = h['date']
+                        break
+                        
             last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
             total_days = interval * 30.4; elapsed = (now - last_date).days
             days_left = int(total_days - elapsed); pct = max(0, min(100, int((days_left / total_days) * 100)))
@@ -210,7 +218,11 @@ async def cmd_history(message: types.Message, state: FSMContext):
     res = "📜 <b>ИСТОРИЯ ОБСЛУЖИВАНИЯ:</b>\n\n"
     for f in filters:
         res += f"🚰 <b>{f['model']}</b>:\n"
-        for h in reversed(f['history'][-7:]): res += f"  ▫️ {h['date']} — {h['item']}\n"
+        valid_history = [h for h in f['history'] if h['item'] != "Картриджи новые"]
+        if not valid_history:
+            res += "  ▫️ История замен пуста\n"
+        else:
+            for h in reversed(valid_history[-7:]): res += f"  ▫️ {h['date']} — {h['item']}\n"
         res += "\n"
     await message.answer(res)
 
@@ -255,7 +267,7 @@ async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
     uid = str(callback_query.from_user.id); now_date = datetime.now().strftime("%d.%m.%Y")
     intervals = {code: data['interval'] for code, data in FILTER_CONFIGS[cat].items()}
     
-    # СТРОГАЯ КОРРЕКЦИЯ СТУПЕНЕЙ ДЛЯ СИСТЕМ С МИНЕРАЛИЗАТОРОМ (РОВНО 5 СТУПЕНЕЙ БЕЗ ПОСТФИЛЬТРА)
+    # СТРОГАЯ КОРРЕКЦИЯ СТУПЕНЕЙ ДЛЯ СИСТЕМ С МИНЕРАЛИЗАТОРОМ (БЕЗ ПОСТФИЛЬТРА)
     if cat == "osmos":
         if any(x in model_name.lower() for x in ["m", "мин", "морион"]):
             intervals["post"] = 0  
@@ -263,9 +275,11 @@ async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
             intervals["min"] = 0   
             
     if uid not in users_db: users_db[uid] = {"filters": [], "snooze_until": None}
+    
+    # ИСПРАВЛЕНО: Вместо "Система добавлена" используется плашка "Картриджи новые"
     users_db[uid]["filters"].append({
         "model": f"{brand} {model_name}", "category": cat, "intervals": intervals,
-        "history": [{"date": now_date, "item": "Система добавлена"}], "created_at": now_date, "custom_names": {}
+        "history": [{"date": now_date, "item": "Картриджи новые"}], "created_at": now_date, "custom_names": {}
     })
     await sync_gist("save")
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
@@ -278,9 +292,23 @@ async def sr_choice(callback_query: types.CallbackQuery):
     await callback_query.answer()
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
     f = get_user_filters(uid)[idx]
+    
+    active_codes = [code for code, val in f['intervals'].items() if val > 0]
+    
+    # ИСПРАВЛЕНО: Если в фильтре всего один активный картридж, не спрашиваем "что именно заменили", а сразу запрашиваем дату
+    if len(active_codes) == 1:
+        code = active_codes[0]
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(types.InlineKeyboardButton("📅 Сегодня", callback_data=f"dn_{code}_{idx}"),
+               types.InlineKeyboardButton("✍️ Вручную", callback_data=f"dm_{code}_{idx}"),
+               get_back_btn("main_menu"))
+        await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                    text="Когда была замена?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
+        return
+
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for code, val in f['intervals'].items():
-        if val > 0: kb.add(types.InlineKeyboardButton(get_item_name(f, code), callback_data=f"opt_{code}_{idx}"))
+    for code in active_codes:
+        kb.add(types.InlineKeyboardButton(get_item_name(f, code), callback_data=f"opt_{code}_{idx}"))
     kb.add(get_back_btn("main_menu"))
     await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
                                 text="Что именно заменили?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
@@ -302,7 +330,12 @@ async def date_today(callback_query: types.CallbackQuery):
     _, code, idx = callback_query.data.split('_'); uid = str(callback_query.from_user.id)
     idx = int(idx); f = users_db[uid]["filters"][idx]
     name = get_item_name(f, code)
-    users_db[uid]["filters"][idx]['history'].append({"date": datetime.now().strftime("%d.%m.%Y"), "item": name})
+    
+    # ИСПРАВЛЕНО: При записи в историю теперь строго передается code для точного расчёта сроков
+    users_db[uid]["filters"][idx]['history'].append({"date": datetime.now().strftime("%d.%m.%Y"), "item": name, "code": code})
+    # ИСПРАВЛЕНО: Убираем плашку "Картриджи новые" при добавлении реальной истории
+    users_db[uid]["filters"][idx]['history'] = [h for h in users_db[uid]["filters"][idx]['history'] if h['item'] != "Картриджи новые"]
+    
     await sync_gist("save")
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(uid, f"✅ Замена {name} сохранена!", reply_markup=get_main_menu())
@@ -314,7 +347,7 @@ async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext)
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
     
-    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ РУЧНОМ ВВОДЕ
+    # ИСПРАВЛЕНО: Меню полностью скрывается (удаляется) из чата при начале ручного ввода
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -331,7 +364,12 @@ async def date_man_msg(message: types.Message, state: FSMContext):
         idx, code = data['dm_idx'], data['dm_code']
         f = users_db[uid]["filters"][idx]
         name = get_item_name(f, code)
-        users_db[uid]["filters"][idx]['history'].append({"date": valid, "item": name})
+        
+        # ИСПРАВЛЕНО: В историю замен пишется code для точности вычислений
+        users_db[uid]["filters"][idx]['history'].append({"date": valid, "item": name, "code": code})
+        # ИСПРАВЛЕНО: Убираем плашку "Картриджи новые"
+        users_db[uid]["filters"][idx]['history'] = [h for h in users_db[uid]["filters"][idx]['history'] if h['item'] != "Картриджи новые"]
+        
         await sync_gist("save"); await state.finish()
         await message.answer(f"✅ Сохранено на {valid}!", reply_markup=get_main_menu())
     except:
@@ -368,7 +406,7 @@ async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext
     await state.update_data(edit_idx=int(idx), edit_code=code)
     await FilterStates.waiting_for_cartridge_rename.set()
     
-    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ НАЧАЛЕ ПЕРЕИМЕНОВАНИЯ
+    # ИСПРАВЛЕНО: Скрываем старое меню при переименовании
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -417,7 +455,7 @@ async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
     
-    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ СМЕНЕ ИНТЕРВАЛА
+    # ИСПРАВЛЕНО: Скрываем старое меню при смене сроков
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -454,7 +492,7 @@ async def del_confirm(callback_query: types.CallbackQuery):
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(uid, f"✅ Система {name} удалена.", reply_markup=get_main_menu())
 
-# --- УМНАЯ МОДЕРНИЗАЦИЯ ПОИСКА НА МАРКЕТПЛЕЙСАХ ---
+# --- МОДЕРНИЗАЦИЯ ПОИСКА НА МАРКЕТПЛЕЙСАХ ---
 
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_"), state='*')
 async def process_buy_filter(callback_query: types.CallbackQuery):
@@ -483,7 +521,7 @@ async def process_buy_item(callback_query: types.CallbackQuery):
     f = users_db[uid]["filters"][idx]
     item_name = get_item_name(f, code)
     
-    # СКЛЕИВАЕМ БРЕНД СИСТЕМЫ С КАРТРИДЖЕМ ДЛЯ ИДЕАЛЬНОЙ ВЫДАЧИ НА МАРКЕТПЛЕЙСАХ
+    # ИСПРАВЛЕНО: К поисковому запросу жестко приклеивается название фильтра для идеального поиска (например: atoll мембрана 75)
     search_query = f"{f['model']} {item_name}"
     
     ozon_url = f"https://www.ozon.ru/search/?text={quote(search_query)}"
@@ -496,14 +534,19 @@ async def process_buy_item(callback_query: types.CallbackQuery):
         types.InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"buy_{idx}")
     )
     
-    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+    await callback_query.message.edit_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
                                 text=f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
-# --- ИСПРАВЛЕННОЕ ПОДМЕНЮ НАСТРОЕК С FAQ ---
+# --- ПОДМЕНЮ НАСТРОЕК С FAQ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
     await callback_query.answer() 
+    
+    # ИСПРАВЛЕНО: При открытии справки старое инлайн-меню настроек удаляется, а справка прилетает чистым новым сообщением
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except: pass
+    
     faq_text = (
         "ℹ️ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n"
         "━━━━━━━━━━━━━━━\n\n"
@@ -512,7 +555,7 @@ async def set_faq_handler(callback_query: types.CallbackQuery):
         "📌 <b>2. Смена интервалов</b>\n"
         "Для калибровки под индивидуальное качество воды сроки обслуживания настраиваются под себя. В разделе <i>Настройки ⚙️ Сроки замены</i> вы можете переписать базовый период обслуживания в месяцах для любой ступени.\n\n"
         "📌 <b>3. Ручной ввод даты замены</b>\n"
-        "Если вы провели обслуживание картриджей ранее и забыли вовремя зафиксировать это в боте — нажмите кнопку <i>📅 Заменил картридж</i> и выберите пункт <i>Вручную</i>. Введите дату по строгому шаблону <code>ДД.ММ.ГГГГ</code> (к примеру: 15.05.2026).\n\n"
+        "Если вы провели обслуживание картриджей ранее и забыли вовремя зафиксировать это в боте — нажмите кнопку <i>📅 Заменил картридж</i> и выберите пункт <i>Вручную</i>. Введите дату по строгому шаблону <code>ДД.ММ.ГГГГ</code> (к примеру: 13.12.2025).\n\n"
         "━━━━━━━━━━━━━━━\n\n"
         "🎯 <b>Как улучшить поиск картриджей?</b>\n"
         "Если поиск маркетплейса выдает не то, зайдите в <b>Настройки ⚙️ Названия картриджей</b> и впишите точную модель (например, МП-5В). Бот при нажатии «Купить» подставит именно её.\n\n"
@@ -520,9 +563,8 @@ async def set_faq_handler(callback_query: types.CallbackQuery):
         "🔔 <b>Напоминания:</b> Бот проверяет ресурс в районе 10:00 утра. Оповещения можно откладывать на 1 день или 7 дней кнопками."
     )
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="set_back_to_settings"))
-    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
-                                text=faq_text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
+    kb.add(types.InlineKeyboardButton("⬅️ Назад в настройки", callback_data="set_back_to_settings"))
+    await bot.send_message(chat_id=callback_query.from_user.id, text=faq_text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data == "set_back_to_settings", state='*')
 async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FSMContext):
@@ -572,10 +614,19 @@ async def reminder_scheduler():
                 for f in user_data.get("filters", []):
                     for code, interval in f['intervals'].items():
                         if interval == 0: continue
-                        last_date_str = next((h['date'] for h in reversed(f['history']) if h['item'] not in ["Начало обслуживания", "Система добавлена"]), f['created_at'])
+                        name = get_item_name(f, code)
+                        
+                        # ИСПРАВЛЕНО: Индивидуальный поиск даты последней замены для планировщика
+                        last_date_str = f['created_at']
+                        for h in reversed(f['history']):
+                            if h.get('code') == code or h['item'] == name or h['item'] == AUTO_NAMES.get(f['model'], {}).get(code) or h['item'] == FILTER_CONFIGS[f['category']].get(code, {}).get('name'):
+                                if h['date'] != "Картриджи новые":
+                                    last_date_str = h['date']
+                                    break
+                                    
                         last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
                         if int(interval * 30.4 - (now - last_date).days) <= 7: 
-                            alert_msg += f"⚠️ <b>{f['model']}</b>: {get_item_name(f, code)}\n"
+                            alert_msg += f"⚠️ <b>{f['model']}</b>: {name}\n"
                 if alert_msg:
                     kb = types.InlineKeyboardMarkup(row_width=2)
                     kb.add(types.InlineKeyboardButton("🕒 Завтра", callback_data="sn_1"),
