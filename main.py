@@ -235,7 +235,7 @@ async def process_cat(callback_query: types.CallbackQuery, state: FSMContext):
     kb = types.InlineKeyboardMarkup(row_width=2)
     for b in CATALOGS[cat].keys(): kb.insert(types.InlineKeyboardButton(b, callback_data=f"br_{cat}_{b}"))
     kb.row(get_back_btn("main_menu"))
-    await bot.edit_message_text("Выберите производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await bot.edit_message_text("Выберитешот производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("br_"), state='*')
 async def process_brand(callback_query: types.CallbackQuery, state: FSMContext):
@@ -295,6 +295,10 @@ async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext)
     _, code, idx = callback_query.data.split('_')
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
+    
+    # ПОДСКАЗКА ПРО РУЧНОЙ ВВОД ДАТЫ
+    hint_text = "💡 <b>Подсказка:</b> Ручной ввод полезен, если вы фактически поменяли картридж несколько дней назад. Это сохранит точность ваших графиков и уведомлений."
+    await bot.send_message(callback_query.from_user.id, hint_text)
     await bot.send_message(callback_query.from_user.id, "✍️ <b>Введите дату замены (ДД.ММ.ГГГГ):</b>")
 
 @dp.message_handler(state=FilterStates.waiting_for_date)
@@ -336,6 +340,10 @@ async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext
     _, idx, code = callback_query.data.split('_')
     await state.update_data(edit_idx=int(idx), edit_code=code)
     await FilterStates.waiting_for_cartridge_rename.set()
+    
+    # ПОДСКАЗКА ПРО НАЗВАНИЯ КАРТРИДЖЕЙ
+    hint_text = "💡 <b>Подсказка:</b> Вы можете дать картриджу любое удобное имя (например, 'Atoll Мембрана' или 'Аквафор Механика'). Новое название автоматически зафиксируется и будет использоваться кнопкой 'Купить' для точного поиска на маркетплейсах."
+    await bot.send_message(callback_query.from_user.id, hint_text)
     await bot.send_message(callback_query.from_user.id, "✍️ <b>Введите новое точное название картриджа:</b>\n(Например: МП-5В)")
 
 @dp.message_handler(state=FilterStates.waiting_for_cartridge_rename)
@@ -371,6 +379,10 @@ async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
     _, code, idx = callback_query.data.split('_')
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
+    
+    # ПОДСКАЗКА ПРО ИНТЕРВАЛЫ СМЕНЫ
+    hint_text = "💡 <b>Подсказка:</b> Если у вас дома жесткая, ржавая вода или вы потребляете много объемов, стандартный интервал (например, 6 месяцев) рекомендуется уменьшить вручную, чтобы вовремя получать алерты."
+    await bot.send_message(callback_query.from_user.id, hint_text)
     await bot.send_message(callback_query.from_user.id, "Введите новый срок службы в месяцах (0 - отключить):")
 
 @dp.message_handler(state=FilterStates.waiting_for_interval_change)
@@ -381,7 +393,7 @@ async def ei_msg(message: types.Message, state: FSMContext):
     await sync_gist("save"); await state.finish()
     await message.answer("✅ Срок изменен!", reply_markup=get_main_menu())
 
-# --- ПОДМЕНЮ НАСТРОЕК: УДАЛЕНИЕ СИСТЕМЫ ---
+# --- ПОДМЕНЮ НАСТРОЕК: УДAЛЕНИЕ СИСТЕМЫ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_del", state='*')
 async def set_del_list(callback_query: types.CallbackQuery):
@@ -398,15 +410,67 @@ async def del_confirm(callback_query: types.CallbackQuery):
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(uid, f"✅ Система {name} удалена.", reply_markup=get_main_menu())
 
+# --- ИСПРАВЛЕННАЯ ЛОГИКА МАРКЕТПЛЕЙСОВ (ОБРАБОТКА CALLBACK КНОПКИ «КУПИТЬ») ---
+
+@dp.callback_query_handler(lambda c: c.data.startswith("buy_"), state='*')
+async def process_buy_filter(callback_query: types.CallbackQuery):
+    idx = int(callback_query.data.split('_')[1])
+    uid = str(callback_query.from_user.id)
+    filters = get_user_filters(uid)
+    if idx >= len(filters): return await bot.answer_callback_query(callback_query.id, "Система не найдена.")
+    
+    f = filters[idx]
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    
+    # Перебираем все активные ступени фильтра, создавая кнопки выбора конкретной детали
+    for code, val in f['intervals'].items():
+        if val > 0:
+            item_name = get_item_name(f, code)
+            kb.add(types.InlineKeyboardButton(f"🔍 Найти: {item_name}", callback_data=f"bi_{idx}_{code}"))
+            
+    kb.add(get_back_btn("main_menu"))
+    await bot.edit_message_text(f"Какой картридж для системы <b>{f['model']}</b> вы хотите заказать?", 
+                                callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("bi_"), state='*')
+async def process_buy_item(callback_query: types.CallbackQuery):
+    _, idx, code = callback_query.data.split('_')
+    idx = int(idx)
+    uid = str(callback_query.from_user.id)
+    f = users_db[uid]["filters"][idx]
+    item_name = get_item_name(f, code)
+    
+    # Формируем безопасные URL для автоматического поиска на маркетплейсах
+    ozon_url = f"https://www.ozon.ru/search/?text={quote(item_name)}"
+    wb_url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={quote(item_name)}"
+    
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    # Параметр url намертво связывает кнопки с внешним переходом
+    kb.add(
+        types.InlineKeyboardButton("🛒 Перейти на Ozon", url=ozon_url),
+        types.InlineKeyboardButton("🛍️ Перейти на Wildberries", url=wb_url),
+        types.InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"buy_{idx}")
+    )
+    
+    await bot.edit_message_text(f"Сформированы ссылки для поиска картриджа:\n📦 <b>{item_name}</b>", 
+                                callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+
 # --- ПОДМЕНЮ НАСТРОЕК: FAQ & НАВИГАЦИЯ НАЗАД ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     faq_text = (
-        "ℹ️ <b>СПРАВКА И ПОМОЩЬ</b>\n" + "━" * 15 + "\n\n"
+        "ℹ/ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n" + "━" * 15 + "\n\n"
+        "📌 <b>1. Названия картриджей</b>\n"
+        "Вы можете присвоить ступеням фильтрации кастомные текстовые имена (например, 'Atoll Мембрана', 'Аквафор Механика'). Перейдите в <i>Настройки -> Названия картриджей</i>, выберите нужную позицию и введите текст. Бот автоматически привяжет его к кнопкам моментальной покупки.\n\n"
+        "📌 <b>2. Смена интервалов</b>\n"
+        "Для калибровки под индивидуальное качество воды, сроки службы настраиваются под себя. В разделе <i>Настройки -> Сроки замены</i> вы можете переписать базовый период обслуживания в месяцах для любой ступени.\n\n"
+        "📌 <b>3. Ручной ввод даты замены</b>\n"
+        "Если вы провели обслуживание картриджей ранее и забыли вовремя зафиксировать это в боте — нажмите кнопку <i>📅 Заменил картридж</i> и выберите пункт <i>Вручную</i>. Введите дату по строгому шаблону <code>ДД.ММ.ГГГГ</code> (к примеру: 15.05.2026).\n\n"
+        "━" * 15 + "\n\n"
         "🎯 <b>Как улучшить поиск картриджей?</b>\n"
-        "Если поиск маркетплейса выдает не то, зайдите в <b>Настройки -> Названия картриджей</b> и вписав точную модель (например, МП-5В). Бот при нажатии «Купить» подставит именно её.\n\n"
+        "Если поиск маркетплейса выдает не то, зайдите в <b>Настройки -> Названия картриджей</b> и впишите точную модель (например, МП-5В). Бот при нажатии «Купить» подставит именно её.\n\n"
         "🤖 <b>Авто-названия:</b> Для известных систем (Atoll, Аквафор Морион) бот автоматически подбирает заводские наименования коробок (№202, №203).\n\n"
         "🔔 <b>Напоминания:</b> Бот проверяет ресурс в районе 10:00 утра. Оповещения можно откладывать на 1 день или 7 дней кнопками."
     )
@@ -438,7 +502,7 @@ async def process_snooze(callback_query: types.CallbackQuery):
 async def reminder_scheduler():
     while True:
         now = datetime.now()
-        if 10 <= now.hour <= 11:
+        if now.hour == 10:  # Будет срабатывать раз в сутки в промежутке 10:00-11:00
             for uid, user_data in users_db.items():
                 if not isinstance(user_data, dict): continue
                 snooze_until_str = user_data.get("snooze_until")
