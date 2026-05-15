@@ -62,7 +62,7 @@ async def sync_gist(action="load"):
 # --- ПОЛНЫЙ КАТАЛОГ СИСТЕМ (18 БРЕНДОВ) ---
 CATALOGS = {
     "osmos": {
-        "Атолл": ["A-550", "A-575", "A-550m", "A-575m", "A-450"],
+        "Атолл": ["A-550", "A-575", "A-550m", "A-575m", "A-440"],
         "Барьер": ["Профи Осмо 100", "Профи Осмо 100 М", "Compact Osmo"],
         "Гейзер": ["Престиж", "Аллегро", "Престиж М", "Аллегро М"],
         "Аквафор": ["DWM-101S Морион", "DWM-102S", "Осмо Про 50"],
@@ -209,7 +209,7 @@ async def cmd_history(message: types.Message, state: FSMContext):
     if not filters: return await message.answer("История пуста.")
     res = "📜 <b>ИСТОРИЯ ОБСЛУЖИВАНИЯ:</b>\n\n"
     for f in filters:
-        res += f"🚰 <b>{f['model']}</b>:\n"
+        res += f" <b>{f['model']}</b>:\n"
         for h in reversed(f['history'][-7:]): res += f"  ▫️ {h['date']} — {h['item']}\n"
         res += "\n"
     await message.answer(res)
@@ -229,33 +229,36 @@ async def cmd_settings(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("cat_"), state='*')
 async def process_cat(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     cat = callback_query.data.split('_')[1]
     if cat == "flow":
         await bot.send_message(callback_query.from_user.id, "💡 <b>Подсказка:</b> Для магистральных фильтров подходят разные картриджи. Вы сможете указать точную модель (например, МП-5В) в Настройках после добавления.")
     kb = types.InlineKeyboardMarkup(row_width=2)
     for b in CATALOGS[cat].keys(): kb.insert(types.InlineKeyboardButton(b, callback_data=f"br_{cat}_{b}"))
     kb.row(get_back_btn("main_menu"))
-    await bot.edit_message_text("Выберите производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("Выберите производителя:", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("br_"), state='*')
 async def process_brand(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     _, cat, brand = callback_query.data.split('_'); kb = types.InlineKeyboardMarkup(row_width=1)
     for idx, m in enumerate(CATALOGS[cat][brand]): kb.add(types.InlineKeyboardButton(m, callback_data=f"mod_{cat}_{brand}_{idx}"))
     kb.add(get_back_btn(f"cat_{cat}"))
-    await bot.edit_message_text(f"Модели {brand}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text(f"Модели {brand}:", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mod_"), state='*')
 async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     _, cat, brand, idx = callback_query.data.split('_'); model_name = CATALOGS[cat][brand][int(idx)]
     uid = str(callback_query.from_user.id); now_date = datetime.now().strftime("%d.%m.%Y")
     intervals = {code: data['interval'] for code, data in FILTER_CONFIGS[cat].items()}
     
-    # СТРОГАЯ КОРРЕКЦИЯ СТУПЕНЕЙ ДЛЯ ОСМОСА С МИНЕРАЛИЗАТОРОМ (ATOLL М-СЕРИИ И ДР.)
+    # СТРОГАЯ КОРРЕКЦИЯ ДЛЯ СИСТЕМ С МИНЕРАЛИЗАТОРОМ (ОСТАВЛЯЕМ РОВНО 5 СТУПЕНЕЙ БЕЗ ПОСТФИЛЬТРА)
     if cat == "osmos":
         if any(x in model_name.lower() for x in ["m", "мин", "морион"]):
-            intervals["post"] = 0  # Принудительно отключаем постфильтр, оставляя ровно 5 ступеней
+            intervals["post"] = 0  
         else:
-            intervals["min"] = 0   # Для обычных систем отключаем минерализатор
+            intervals["min"] = 0   
             
     if uid not in users_db: users_db[uid] = {"filters": [], "snooze_until": None}
     users_db[uid]["filters"].append({
@@ -270,25 +273,28 @@ async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sr_"), state='*')
 async def sr_choice(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
     f = get_user_filters(uid)[idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, val in f['intervals'].items():
         if val > 0: kb.add(types.InlineKeyboardButton(get_item_name(f, code), callback_data=f"opt_{code}_{idx}"))
     kb.add(get_back_btn("main_menu"))
-    await bot.edit_message_text("Что именно заменили?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("Что именно заменили?", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("opt_"), state='*')
 async def opt_choice_step(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     _, code, idx = callback_query.data.split('_')
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📅 Сегодня", callback_data=f"dn_{code}_{idx}"),
            types.InlineKeyboardButton("✍️ Вручную", callback_data=f"dm_{code}_{idx}"),
            get_back_btn(f"sr_{idx}"))
-    await bot.edit_message_text("Когда была замена?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("Когда была замена?", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dn_"), state='*')
 async def date_today(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     _, code, idx = callback_query.data.split('_'); uid = str(callback_query.from_user.id)
     idx = int(idx); f = users_db[uid]["filters"][idx]
     name = get_item_name(f, code)
@@ -299,11 +305,12 @@ async def date_today(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dm_"), state='*')
 async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     _, code, idx = callback_query.data.split('_')
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
     
-    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ РУЧНОМ ВВОДЕ
+    # СКРЫВАЕМ МЕНЮ ИЗ ЧАТА СРАЗУ ПОСЛЕ КЛИКА
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -330,29 +337,32 @@ async def date_man_msg(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data == "set_names", state='*')
 async def set_names_list(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     uid = str(callback_query.from_user.id); filters = get_user_filters(uid)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(filters): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"ren_{i}"))
     kb.add(get_back_btn("set_back_to_settings"))
-    await bot.edit_message_text("Выберите систему для переименования картриджей:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("Выберите систему для переименования картриджей:", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ren_"), state='*')
 async def ren_step_choice(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
     f = get_user_filters(uid)[idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, val in f['intervals'].items():
         if val > 0: kb.add(types.InlineKeyboardButton(f"Изменить: {get_item_name(f, code)}", callback_data=f"edn_{idx}_{code}"))
     kb.add(get_back_btn("set_names"))
-    await bot.edit_message_text(f"Что переименовать в {f['model']}?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text(f"Что переименовать в {f['model']}?", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("edn_"), state='*')
 async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     _, idx, code = callback_query.data.split('_')
     await state.update_data(edit_idx=int(idx), edit_code=code)
     await FilterStates.waiting_for_cartridge_rename.set()
     
-    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ НАЧАЛЕ ПЕРЕИМЕНОВАНИЯ
+    # СКРЫВАЕМ МЕНЮ ИЗ ЧАТА СРАЗУ ПОСЛЕ КЛИКА
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -374,29 +384,32 @@ async def ren_input_save(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data == "set_ints", state='*')
 async def set_ints_list(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     uid = str(callback_query.from_user.id); filters = get_user_filters(uid)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(filters): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"si_{i}"))
     kb.add(get_back_btn("set_back_to_settings"))
-    await bot.edit_message_text("Изменить сроки для системы:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("Изменить сроки для системы:", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("si_"), state='*')
 async def si_choice(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id); f = get_user_filters(uid)[idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, val in f['intervals'].items():
-        if val > 0:  # Показываем только активные ступени (у Atoll 575m постфильтр со значением 0 тут не появится)
+        if val > 0:  
             kb.add(types.InlineKeyboardButton(f"{get_item_name(f, code)} ({val} мес)", callback_data=f"ei_{code}_{idx}"))
     kb.add(get_back_btn("set_ints"))
-    await bot.edit_message_text(f"Ступень {f['model']}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text(f"Ступень {f['model']}:", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ei_"), state='*')
 async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     _, code, idx = callback_query.data.split('_')
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
     
-    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ СМЕНЕ ИНТЕРВАЛА
+    # СКРЫВАЕМ МЕНЮ ИЗ ЧАТА СРАЗУ ПОСЛЕ КЛИКА
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -417,23 +430,26 @@ async def ei_msg(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data == "set_del", state='*')
 async def set_del_list(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     uid = str(callback_query.from_user.id); filters = get_user_filters(uid)
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(filters): kb.add(types.InlineKeyboardButton(f"🗑 {f['model']}", callback_data=f"del_{i}"))
     kb.add(get_back_btn("set_back_to_settings"))
-    await bot.edit_message_text("Какую систему удалить?", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("Какую систему удалить?", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("del_"), state='*')
 async def del_confirm(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
     name = users_db[uid]["filters"].pop(idx)['model']; await sync_gist("save")
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(uid, f"✅ Система {name} удалена.", reply_markup=get_main_menu())
 
-# --- ИСПРАВЛЕННАЯ СИСТЕМА УМНОГО ПОИСКА НА МАРКЕТПЛЕЙСАХ ---
+# --- УМНАЯ МОДЕРНИЗАЦИЯ ПОИСКА НА МАРКЕТПЛЕЙСАХ ---
 
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_"), state='*')
 async def process_buy_filter(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     idx = int(callback_query.data.split('_')[1])
     uid = str(callback_query.from_user.id)
     filters = get_user_filters(uid)
@@ -447,17 +463,18 @@ async def process_buy_filter(callback_query: types.CallbackQuery):
             kb.add(types.InlineKeyboardButton(f"🔍 Найти: {item_name}", callback_data=f"bi_{idx}_{code}"))
             
     kb.add(get_back_btn("main_menu"))
-    await bot.edit_message_text(f"Какой картридж для системы <b>{f['model']}</b> вы хотите заказать?", 
-                                callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text(f"Какой картридж для системы <b>{f['model']}</b> вы хотите заказать?", 
+                                reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data.startswith("bi_"), state='*')
 async def process_buy_item(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     _, idx, code = callback_query.data.split('_')
     idx = int(idx); uid = str(callback_query.from_user.id)
     f = users_db[uid]["filters"][idx]
     item_name = get_item_name(f, code)
     
-    # СКЛЕИВАЕМ НАЗВАНИЕ ФИЛЬТРА И МОДЬ КАРТРИДЖА ДЛЯ ТОЧНОГО РЕЗУЛЬТАТА ПОИСКА
+    # СКЛЕИВАЕМ БРЕНД СИСТЕМЫ С КАРТРИДЖЕМ ДЛЯ ИДЕАЛЬНОЙ ВЫДАЧИ НА МАРКЕТПЛЕЙСАХ
     search_query = f"{f['model']} {item_name}"
     
     ozon_url = f"https://www.ozon.ru/search/?text={quote(search_query)}"
@@ -470,13 +487,14 @@ async def process_buy_item(callback_query: types.CallbackQuery):
         types.InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"buy_{idx}")
     )
     
-    await bot.edit_message_text(f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", 
-                                callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text(f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", 
+                                reply_markup=kb, parse_mode='HTML')
 
-# --- ИСПРАВЛЕННОЕ ПОДМЕНЮ НАСТРОЕК: РАБОЧИЙ FAQ И СТАТИЧЕСКАЯ НАВИГАЦИЯ ---
+# --- ЖЕЛЕЗНО РАБОЧЕЕ ПОДМЕНЮ НАСТРОЕК С FAQ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
+    await callback_query.answer() # Исправлено: Снимает вечную загрузку с кнопки
     faq_text = (
         "ℹ️ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n" + "━" * 15 + "\n\n"
         "📌 <b>1. Названия картриджей</b>\n"
@@ -493,20 +511,22 @@ async def set_faq_handler(callback_query: types.CallbackQuery):
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="set_back_to_settings"))
-    await bot.edit_message_text(faq_text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text(faq_text, reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data == "set_back_to_settings", state='*')
 async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("ℹ️ FAQ / Справка", callback_data="set_faq"),
            types.InlineKeyboardButton("✏️ Названия картриджей", callback_data="set_names"),
            types.InlineKeyboardButton("⏱ Сроки замены", callback_data="set_ints"),
            types.InlineKeyboardButton("🗑 Удалить фильтр", callback_data="set_del"),
            get_back_btn("main_menu"))
-    await bot.edit_message_text("⚙️ <b>Настройки:</b>", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await callback_query.message.edit_text("⚙️ <b>Настройки:</b>", reply_markup=kb, parse_mode='HTML')
 
 @dp.callback_query_handler(lambda c: c.data == "main_menu", state='*')
 async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
     await state.finish()
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
@@ -516,18 +536,18 @@ async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMConte
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sn_"), state='*')
 async def process_snooze(callback_query: types.CallbackQuery):
+    await callback_query.answer()
     days = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
     until_dt = datetime.now() + timedelta(days=days)
     if uid in users_db:
         users_db[uid]["snooze_until"] = until_dt.strftime("%Y-%m-%d %H:%M:%S")
         await sync_gist("save")
-    await bot.answer_callback_query(callback_query.id, "Отложено")
     await bot.edit_message_text(f"✅ Напомню через {days} дн.", callback_query.message.chat.id, callback_query.message.message_id)
 
 async def reminder_scheduler():
     while True:
         now = datetime.now()
-        if now.hour == 10:  # Проверка строго раз в сутки в 10 утра
+        if now.hour == 10:  
             for uid, user_data in users_db.items():
                 if not isinstance(user_data, dict): continue
                 snooze_until_str = user_data.get("snooze_until")
