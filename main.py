@@ -24,9 +24,9 @@ users_db = {}
 # --- БАЗА АВТО-НАЗВАНИЙ ПО МОДЕЛЯМ ---
 AUTO_NAMES = {
     "Атолл A-550": {"pre": "Набор №202", "mem": "Мембрана 50 GPD", "post": "Постфильтр Atoll"},
-    "Атолл A-550m": {"pre": "Набор №202", "mem": "Мембрана 50 GPD", "post": "Постфильтр Atoll", "min": "Минерализатор Atoll"},
+    "Атолл A-550m": {"pre": "Набор №202", "mem": "Мембрана 50 GPD", "min": "Минерализатор Atoll"}, # Без постфильтра
     "Атолл A-575": {"pre": "Набор №203", "mem": "Мембрана 75 GPD", "post": "Постфильтр Atoll"},
-    "Атолл A-575m": {"pre": "Набор №203", "mem": "Мембрана 75 GPD", "post": "Постфильтр Atoll", "min": "Минерализатор Atoll"},
+    "Атолл A-575m": {"pre": "Набор №203", "mem": "Мембрана 75 GPD", "min": "Минерализатор Atoll"}, # Без постфильтра
     "Аквафор DWM-101S Морион": {"pre": "Модули К5 и К2", "mem": "Мембрана КО-50S", "min": "Модуль К7М"},
     "Аквафор DWM-102S": {"pre": "Модули К5 и К2", "mem": "Мембрана КО-100S", "min": "Модуль К7М"},
     "Гейзер Престиж": {"pre": "Набор №6", "mem": "Мембрана Гейзер 50 GPD", "post": "Постфильтр Т33"},
@@ -235,7 +235,7 @@ async def process_cat(callback_query: types.CallbackQuery, state: FSMContext):
     kb = types.InlineKeyboardMarkup(row_width=2)
     for b in CATALOGS[cat].keys(): kb.insert(types.InlineKeyboardButton(b, callback_data=f"br_{cat}_{b}"))
     kb.row(get_back_btn("main_menu"))
-    await bot.edit_message_text("Выберитешот производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
+    await bot.edit_message_text("Выберите производителя:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("br_"), state='*')
 async def process_brand(callback_query: types.CallbackQuery, state: FSMContext):
@@ -249,7 +249,14 @@ async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
     _, cat, brand, idx = callback_query.data.split('_'); model_name = CATALOGS[cat][brand][int(idx)]
     uid = str(callback_query.from_user.id); now_date = datetime.now().strftime("%d.%m.%Y")
     intervals = {code: data['interval'] for code, data in FILTER_CONFIGS[cat].items()}
-    if cat == "osmos" and not any(x in model_name.lower() for x in ["m", "мин", "морион"]): intervals["min"] = 0
+    
+    # СТРОГАЯ КОРРЕКЦИЯ СТУПЕНЕЙ ДЛЯ ОСМОСА С МИНЕРАЛИЗАТОРОМ (ATOLL М-СЕРИИ И ДР.)
+    if cat == "osmos":
+        if any(x in model_name.lower() for x in ["m", "мин", "морион"]):
+            intervals["post"] = 0  # Принудительно отключаем постфильтр, оставляя ровно 5 ступеней
+        else:
+            intervals["min"] = 0   # Для обычных систем отключаем минерализатор
+            
     if uid not in users_db: users_db[uid] = {"filters": [], "snooze_until": None}
     users_db[uid]["filters"].append({
         "model": f"{brand} {model_name}", "category": cat, "intervals": intervals,
@@ -296,8 +303,12 @@ async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext)
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
     
-    # ПОДСКАЗКА ПРО РУЧНОЙ ВВОД ДАТЫ
-    hint_text = "💡 <b>Подсказка:</b> Ручной ввод полезен, если вы фактически поменяли картридж несколько дней назад. Это сохранит точность ваших графиков и уведомлений."
+    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ РУЧНОМ ВВОДЕ
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except: pass
+    
+    # ПОДСКАЗКА №3: РУЧНОЙ ВВОД ДАТЫ
+    hint_text = "💡 <b>Подсказка:</b> Ручной ввод полезен, если вы фактически поменяли картридж несколько дней назад. Это сохранит точный календарь обслуживания."
     await bot.send_message(callback_query.from_user.id, hint_text)
     await bot.send_message(callback_query.from_user.id, "✍️ <b>Введите дату замены (ДД.ММ.ГГГГ):</b>")
 
@@ -341,8 +352,12 @@ async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext
     await state.update_data(edit_idx=int(idx), edit_code=code)
     await FilterStates.waiting_for_cartridge_rename.set()
     
-    # ПОДСКАЗКА ПРО НАЗВАНИЯ КАРТРИДЖЕЙ
-    hint_text = "💡 <b>Подсказка:</b> Вы можете дать картриджу любое удобное имя (например, 'Atoll Мембрана' или 'Аквафор Механика'). Новое название автоматически зафиксируется и будет использоваться кнопкой 'Купить' для точного поиска на маркетплейсах."
+    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ НАЧАЛЕ ПЕРЕИМЕНОВАНИЯ
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except: pass
+    
+    # ПОДСКАЗКА №1: НАЗВАНИЯ КАРТРИДЖЕЙ
+    hint_text = "💡 <b>Подсказка:</b> Вы можете присвоить ступеням любые понятные вам имена. Введённое название автоматически добавится к названию фильтра при поиске на Ozon/Wildberries."
     await bot.send_message(callback_query.from_user.id, hint_text)
     await bot.send_message(callback_query.from_user.id, "✍️ <b>Введите новое точное название картриджа:</b>\n(Например: МП-5В)")
 
@@ -370,7 +385,8 @@ async def si_choice(callback_query: types.CallbackQuery):
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id); f = get_user_filters(uid)[idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, val in f['intervals'].items():
-        kb.add(types.InlineKeyboardButton(f"{get_item_name(f, code)} ({val} мес)", callback_data=f"ei_{code}_{idx}"))
+        if val > 0:  # Показываем только активные ступени (у Atoll 575m постфильтр со значением 0 тут не появится)
+            kb.add(types.InlineKeyboardButton(f"{get_item_name(f, code)} ({val} мес)", callback_data=f"ei_{code}_{idx}"))
     kb.add(get_back_btn("set_ints"))
     await bot.edit_message_text(f"Ступень {f['model']}:", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
@@ -380,8 +396,12 @@ async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
     
-    # ПОДСКАЗКА ПРО ИНТЕРВАЛЫ СМЕНЫ
-    hint_text = "💡 <b>Подсказка:</b> Если у вас дома жесткая, ржавая вода или вы потребляете много объемов, стандартный интервал (например, 6 месяцев) рекомендуется уменьшить вручную, чтобы вовремя получать алерты."
+    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ СМЕНЕ ИНТЕРВАЛА
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except: pass
+    
+    # ПОДСКАЗКА №2: СМЕНА ИНТЕРВАЛОВ
+    hint_text = "💡 <b>Подсказка:</b> Если вода жесткая или ржавая, стандартный интервал (например, 6 месяцев) рекомендуется уменьшить вручную, чтобы получать своевременные оповещения."
     await bot.send_message(callback_query.from_user.id, hint_text)
     await bot.send_message(callback_query.from_user.id, "Введите новый срок службы в месяцах (0 - отключить):")
 
@@ -393,7 +413,7 @@ async def ei_msg(message: types.Message, state: FSMContext):
     await sync_gist("save"); await state.finish()
     await message.answer("✅ Срок изменен!", reply_markup=get_main_menu())
 
-# --- ПОДМЕНЮ НАСТРОЕК: УДAЛЕНИЕ СИСТЕМЫ ---
+# --- ПОДМЕНЮ НАСТРОЕК: УДАЛЕНИЕ СИСТЕМЫ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_del", state='*')
 async def set_del_list(callback_query: types.CallbackQuery):
@@ -410,7 +430,7 @@ async def del_confirm(callback_query: types.CallbackQuery):
     await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     await bot.send_message(uid, f"✅ Система {name} удалена.", reply_markup=get_main_menu())
 
-# --- ИСПРАВЛЕННАЯ ЛОГИКА МАРКЕТПЛЕЙСОВ (ОБРАБОТКА CALLBACK КНОПКИ «КУПИТЬ») ---
+# --- ИСПРАВЛЕННАЯ СИСТЕМА УМНОГО ПОИСКА НА МАРКЕТПЛЕЙСАХ ---
 
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_"), state='*')
 async def process_buy_filter(callback_query: types.CallbackQuery):
@@ -421,8 +441,6 @@ async def process_buy_filter(callback_query: types.CallbackQuery):
     
     f = filters[idx]
     kb = types.InlineKeyboardMarkup(row_width=1)
-    
-    # Перебираем все активные ступени фильтра, создавая кнопки выбора конкретной детали
     for code, val in f['intervals'].items():
         if val > 0:
             item_name = get_item_name(f, code)
@@ -435,37 +453,36 @@ async def process_buy_filter(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data.startswith("bi_"), state='*')
 async def process_buy_item(callback_query: types.CallbackQuery):
     _, idx, code = callback_query.data.split('_')
-    idx = int(idx)
-    uid = str(callback_query.from_user.id)
+    idx = int(idx); uid = str(callback_query.from_user.id)
     f = users_db[uid]["filters"][idx]
     item_name = get_item_name(f, code)
     
-    # Формируем безопасные URL для автоматического поиска на маркетплейсах
-    ozon_url = f"https://www.ozon.ru/search/?text={quote(item_name)}"
-    wb_url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={quote(item_name)}"
+    # СКЛЕИВАЕМ НАЗВАНИЕ ФИЛЬТРА И МОДЬ КАРТРИДЖА ДЛЯ ТОЧНОГО РЕЗУЛЬТАТА ПОИСКА
+    search_query = f"{f['model']} {item_name}"
+    
+    ozon_url = f"https://www.ozon.ru/search/?text={quote(search_query)}"
+    wb_url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={quote(search_query)}"
     
     kb = types.InlineKeyboardMarkup(row_width=1)
-    # Параметр url намертво связывает кнопки с внешним переходом
     kb.add(
         types.InlineKeyboardButton("🛒 Перейти на Ozon", url=ozon_url),
         types.InlineKeyboardButton("🛍️ Перейти на Wildberries", url=wb_url),
         types.InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"buy_{idx}")
     )
     
-    await bot.edit_message_text(f"Сформированы ссылки для поиска картриджа:\n📦 <b>{item_name}</b>", 
+    await bot.edit_message_text(f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", 
                                 callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
-# --- ПОДМЕНЮ НАСТРОЕК: FAQ & НАВИГАЦИЯ НАЗАД ---
+# --- ИСПРАВЛЕННОЕ ПОДМЕНЮ НАСТРОЕК: РАБОЧИЙ FAQ И СТАТИЧЕСКАЯ НАВИГАЦИЯ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     faq_text = (
-        "ℹ/ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n" + "━" * 15 + "\n\n"
+        "ℹ️ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n" + "━" * 15 + "\n\n"
         "📌 <b>1. Названия картриджей</b>\n"
-        "Вы можете присвоить ступеням фильтрации кастомные текстовые имена (например, 'Atoll Мембрана', 'Аквафор Механика'). Перейдите в <i>Настройки -> Названия картриджей</i>, выберите нужную позицию и введите текст. Бот автоматически привяжет его к кнопкам моментальной покупки.\n\n"
+        "Вы можете присвоить ступеням кастомные текстовые имена (например, 'Мембрана 75', 'Механика'). Перейдите в <i>Настройки -> Названия картриджей</i>. Бот автоматически объединит это имя с моделью фильтра для генерации точных ссылок моментальной покупки на маркетплейсах.\n\n"
         "📌 <b>2. Смена интервалов</b>\n"
-        "Для калибровки под индивидуальное качество воды, сроки службы настраиваются под себя. В разделе <i>Настройки -> Сроки замены</i> вы можете переписать базовый период обслуживания в месяцах для любой ступени.\n\n"
+        "Для калибровки под индивидуальное качество воды сроки обслуживания настраиваются под себя. В разделе <i>Настройки -> Сроки замены</i> вы можете переписать базовый период обслуживания в месяцах для любой ступени.\n\n"
         "📌 <b>3. Ручной ввод даты замены</b>\n"
         "Если вы провели обслуживание картриджей ранее и забыли вовремя зафиксировать это в боте — нажмите кнопку <i>📅 Заменил картридж</i> и выберите пункт <i>Вручную</i>. Введите дату по строгому шаблону <code>ДД.ММ.ГГГГ</code> (к примеру: 15.05.2026).\n\n"
         "━" * 15 + "\n\n"
@@ -474,17 +491,25 @@ async def set_faq_handler(callback_query: types.CallbackQuery):
         "🤖 <b>Авто-названия:</b> Для известных систем (Atoll, Аквафор Морион) бот автоматически подбирает заводские наименования коробок (№202, №203).\n\n"
         "🔔 <b>Напоминания:</b> Бот проверяет ресурс в районе 10:00 утра. Оповещения можно откладывать на 1 день или 7 дней кнопками."
     )
-    kb = types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="set_back_to_settings"))
-    await bot.send_message(callback_query.from_user.id, faq_text, reply_markup=kb)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="set_back_to_settings"))
+    await bot.edit_message_text(faq_text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data == "set_back_to_settings", state='*')
 async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FSMContext):
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-    await cmd_settings(callback_query.message, state)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("ℹ️ FAQ / Справка", callback_data="set_faq"),
+           types.InlineKeyboardButton("✏️ Названия картриджей", callback_data="set_names"),
+           types.InlineKeyboardButton("⏱ Сроки замены", callback_data="set_ints"),
+           types.InlineKeyboardButton("🗑 Удалить фильтр", callback_data="set_del"),
+           get_back_btn("main_menu"))
+    await bot.edit_message_text("⚙️ <b>Настройки:</b>", callback_query.message.chat.id, callback_query.message.message_id, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data == "main_menu", state='*')
 async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.finish(); await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    await state.finish()
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except: pass
     await bot.send_message(callback_query.from_user.id, "Главное меню:", reply_markup=get_main_menu())
 
 # --- СИСТЕМА УМНЫХ ОПОВЕЩЕНИЙ И СНА КНОПОК ---
@@ -502,7 +527,7 @@ async def process_snooze(callback_query: types.CallbackQuery):
 async def reminder_scheduler():
     while True:
         now = datetime.now()
-        if now.hour == 10:  # Будет срабатывать раз в сутки в промежутке 10:00-11:00
+        if now.hour == 10:  # Проверка строго раз в сутки в 10 утра
             for uid, user_data in users_db.items():
                 if not isinstance(user_data, dict): continue
                 snooze_until_str = user_data.get("snooze_until")
@@ -555,7 +580,7 @@ async def start_webserver():
     await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000))).start()
 
 async def on_startup(dp):
-    await bot.delete_webhook(drop_pending_updates=True) # Сброс старых процессов и вебхуков
+    await bot.delete_webhook(drop_pending_updates=True)
     await sync_gist("load")
     asyncio.create_task(start_webserver())
     asyncio.create_task(reminder_scheduler())
