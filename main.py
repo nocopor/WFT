@@ -62,7 +62,7 @@ async def sync_gist(action="load"):
 # --- ПОЛНЫЙ КАТАЛОГ СИСТЕМ (18 БРЕНДОВ) ---
 CATALOGS = {
     "osmos": {
-        "Атолл": ["A-550", "A-575", "A-550m", "A-575m", "A-440"],
+        "Атолл": ["A-550", "A-575", "A-550m", "A-575m", "A-450"],
         "Барьер": ["Профи Осмо 100", "Профи Осмо 100 М", "Compact Osmo"],
         "Гейзер": ["Престиж", "Аллегро", "Престиж М", "Аллегро М"],
         "Аквафор": ["DWM-101S Морион", "DWM-102S", "Осмо Про 50"],
@@ -209,7 +209,7 @@ async def cmd_history(message: types.Message, state: FSMContext):
     if not filters: return await message.answer("История пуста.")
     res = "📜 <b>ИСТОРИЯ ОБСЛУЖИВАНИЯ:</b>\n\n"
     for f in filters:
-        res += f" <b>{f['model']}</b>:\n"
+        res += f"🚰 <b>{f['model']}</b>:\n"
         for h in reversed(f['history'][-7:]): res += f"  ▫️ {h['date']} — {h['item']}\n"
         res += "\n"
     await message.answer(res)
@@ -236,7 +236,8 @@ async def process_cat(callback_query: types.CallbackQuery, state: FSMContext):
     kb = types.InlineKeyboardMarkup(row_width=2)
     for b in CATALOGS[cat].keys(): kb.insert(types.InlineKeyboardButton(b, callback_data=f"br_{cat}_{b}"))
     kb.row(get_back_btn("main_menu"))
-    await callback_query.message.edit_text("Выберите производителя:", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="Выберите производителя:", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("br_"), state='*')
 async def process_brand(callback_query: types.CallbackQuery, state: FSMContext):
@@ -244,7 +245,8 @@ async def process_brand(callback_query: types.CallbackQuery, state: FSMContext):
     _, cat, brand = callback_query.data.split('_'); kb = types.InlineKeyboardMarkup(row_width=1)
     for idx, m in enumerate(CATALOGS[cat][brand]): kb.add(types.InlineKeyboardButton(m, callback_data=f"mod_{cat}_{brand}_{idx}"))
     kb.add(get_back_btn(f"cat_{cat}"))
-    await callback_query.message.edit_text(f"Модели {brand}:", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=f"Модели {brand}:", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mod_"), state='*')
 async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
@@ -253,7 +255,7 @@ async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
     uid = str(callback_query.from_user.id); now_date = datetime.now().strftime("%d.%m.%Y")
     intervals = {code: data['interval'] for code, data in FILTER_CONFIGS[cat].items()}
     
-    # СТРОГАЯ КОРРЕКЦИЯ ДЛЯ СИСТЕМ С МИНЕРАЛИЗАТОРОМ (ОСТАВЛЯЕМ РОВНО 5 СТУПЕНЕЙ БЕЗ ПОСТФИЛЬТРА)
+    # СТРОГАЯ КОРРЕКЦИЯ СТУПЕНЕЙ ДЛЯ СИСТЕМ С МИНЕРАЛИЗАТОРОМ (РОВНО 5 СТУПЕНЕЙ БЕЗ ПОСТФИЛЬТРА)
     if cat == "osmos":
         if any(x in model_name.lower() for x in ["m", "мин", "морион"]):
             intervals["post"] = 0  
@@ -280,7 +282,8 @@ async def sr_choice(callback_query: types.CallbackQuery):
     for code, val in f['intervals'].items():
         if val > 0: kb.add(types.InlineKeyboardButton(get_item_name(f, code), callback_data=f"opt_{code}_{idx}"))
     kb.add(get_back_btn("main_menu"))
-    await callback_query.message.edit_text("Что именно заменили?", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="Что именно заменили?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("opt_"), state='*')
 async def opt_choice_step(callback_query: types.CallbackQuery):
@@ -290,7 +293,8 @@ async def opt_choice_step(callback_query: types.CallbackQuery):
     kb.add(types.InlineKeyboardButton("📅 Сегодня", callback_data=f"dn_{code}_{idx}"),
            types.InlineKeyboardButton("✍️ Вручную", callback_data=f"dm_{code}_{idx}"),
            get_back_btn(f"sr_{idx}"))
-    await callback_query.message.edit_text("Когда была замена?", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="Когда была замена?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dn_"), state='*')
 async def date_today(callback_query: types.CallbackQuery):
@@ -310,7 +314,7 @@ async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext)
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
     
-    # СКРЫВАЕМ МЕНЮ ИЗ ЧАТА СРАЗУ ПОСЛЕ КЛИКА
+    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ РУЧНОМ ВВОДЕ
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -342,7 +346,8 @@ async def set_names_list(callback_query: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(filters): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"ren_{i}"))
     kb.add(get_back_btn("set_back_to_settings"))
-    await callback_query.message.edit_text("Выберите систему для переименования картриджей:", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="Выберите систему для переименования картриджей:", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ren_"), state='*')
 async def ren_step_choice(callback_query: types.CallbackQuery):
@@ -353,7 +358,8 @@ async def ren_step_choice(callback_query: types.CallbackQuery):
     for code, val in f['intervals'].items():
         if val > 0: kb.add(types.InlineKeyboardButton(f"Изменить: {get_item_name(f, code)}", callback_data=f"edn_{idx}_{code}"))
     kb.add(get_back_btn("set_names"))
-    await callback_query.message.edit_text(f"Что переименовать в {f['model']}?", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=f"Что переименовать в {f['model']}?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("edn_"), state='*')
 async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext):
@@ -362,7 +368,7 @@ async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext
     await state.update_data(edit_idx=int(idx), edit_code=code)
     await FilterStates.waiting_for_cartridge_rename.set()
     
-    # СКРЫВАЕМ МЕНЮ ИЗ ЧАТА СРАЗУ ПОСЛЕ КЛИКА
+    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ НАЧАЛЕ ПЕРЕИМЕНОВАНИЯ
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -389,7 +395,8 @@ async def set_ints_list(callback_query: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(filters): kb.add(types.InlineKeyboardButton(f['model'], callback_data=f"si_{i}"))
     kb.add(get_back_btn("set_back_to_settings"))
-    await callback_query.message.edit_text("Изменить сроки для системы:", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="Изменить сроки для системы:", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("si_"), state='*')
 async def si_choice(callback_query: types.CallbackQuery):
@@ -400,7 +407,8 @@ async def si_choice(callback_query: types.CallbackQuery):
         if val > 0:  
             kb.add(types.InlineKeyboardButton(f"{get_item_name(f, code)} ({val} мес)", callback_data=f"ei_{code}_{idx}"))
     kb.add(get_back_btn("set_ints"))
-    await callback_query.message.edit_text(f"Ступень {f['model']}:", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=f"Ступень {f['model']}:", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ei_"), state='*')
 async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
@@ -409,7 +417,7 @@ async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
     
-    # СКРЫВАЕМ МЕНЮ ИЗ ЧАТА СРАЗУ ПОСЛЕ КЛИКА
+    # СКРЫВАЕМ СТАРЫЕ КНОПКИ ПРИ СМЕНЕ ИНТЕРВАЛА
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except: pass
     
@@ -435,7 +443,8 @@ async def set_del_list(callback_query: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, f in enumerate(filters): kb.add(types.InlineKeyboardButton(f"🗑 {f['model']}", callback_data=f"del_{i}"))
     kb.add(get_back_btn("set_back_to_settings"))
-    await callback_query.message.edit_text("Какую систему удалить?", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="Какую систему удалить?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("del_"), state='*')
 async def del_confirm(callback_query: types.CallbackQuery):
@@ -463,8 +472,8 @@ async def process_buy_filter(callback_query: types.CallbackQuery):
             kb.add(types.InlineKeyboardButton(f"🔍 Найти: {item_name}", callback_data=f"bi_{idx}_{code}"))
             
     kb.add(get_back_btn("main_menu"))
-    await callback_query.message.edit_text(f"Какой картридж для системы <b>{f['model']}</b> вы хотите заказать?", 
-                                reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=f"Какой картридж для системы <b>{f['model']}</b> вы хотите заказать?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("bi_"), state='*')
 async def process_buy_item(callback_query: types.CallbackQuery):
@@ -487,31 +496,33 @@ async def process_buy_item(callback_query: types.CallbackQuery):
         types.InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"buy_{idx}")
     )
     
-    await callback_query.message.edit_text(f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", 
-                                reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
-# --- ЖЕЛЕЗНО РАБОЧЕЕ ПОДМЕНЮ НАСТРОЕК С FAQ ---
+# --- ИСПРАВЛЕННОЕ ПОДМЕНЮ НАСТРОЕК С FAQ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
-    await callback_query.answer() # Исправлено: Снимает вечную загрузку с кнопки
+    await callback_query.answer() 
     faq_text = (
-        "ℹ️ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n" + "━" * 15 + "\n\n"
+        "ℹ️ <b>СПРАВКА И ПОМОЩЬ (FAQ)</b>\n"
+        "━━━━━━━━━━━━━━━\n\n"
         "📌 <b>1. Названия картриджей</b>\n"
-        "Вы можете присвоить ступеням кастомные текстовые имена (например, 'Мембрана 75', 'Механика'). Перейдите в <i>Настройки -> Названия картриджей</i>. Бот автоматически объединит это имя с моделью фильтра для генерации точных ссылок моментальной покупки на маркетплейсах.\n\n"
+        "Вы можете присвоить ступеням кастомные текстовые имена (например, 'Мембрана 75', 'Механика'). Перейдите в <i>Настройки ⚙️ Названия картриджей</i>. Бот автоматически объединит это имя с моделью фильтра для генерации точных ссылок моментальной покупки на маркетплейсах.\n\n"
         "📌 <b>2. Смена интервалов</b>\n"
-        "Для калибровки под индивидуальное качество воды сроки обслуживания настраиваются под себя. В разделе <i>Настройки -> Сроки замены</i> вы можете переписать базовый период обслуживания в месяцах для любой ступени.\n\n"
+        "Для калибровки под индивидуальное качество воды сроки обслуживания настраиваются под себя. В разделе <i>Настройки ⚙️ Сроки замены</i> вы можете переписать базовый период обслуживания в месяцах для любой ступени.\n\n"
         "📌 <b>3. Ручной ввод даты замены</b>\n"
         "Если вы провели обслуживание картриджей ранее и забыли вовремя зафиксировать это в боте — нажмите кнопку <i>📅 Заменил картридж</i> и выберите пункт <i>Вручную</i>. Введите дату по строгому шаблону <code>ДД.ММ.ГГГГ</code> (к примеру: 15.05.2026).\n\n"
-        "━" * 15 + "\n\n"
+        "━━━━━━━━━━━━━━━\n\n"
         "🎯 <b>Как улучшить поиск картриджей?</b>\n"
-        "Если поиск маркетплейса выдает не то, зайдите в <b>Настройки -> Названия картриджей</b> и впишите точную модель (например, МП-5В). Бот при нажатии «Купить» подставит именно её.\n\n"
+        "Если поиск маркетплейса выдает не то, зайдите в <b>Настройки ⚙️ Названия картриджей</b> и впишите точную модель (например, МП-5В). Бот при нажатии «Купить» подставит именно её.\n\n"
         "🤖 <b>Авто-названия:</b> Для известных систем (Atoll, Аквафор Морион) бот автоматически подбирает заводские наименования коробок (№202, №203).\n\n"
         "🔔 <b>Напоминания:</b> Бот проверяет ресурс в районе 10:00 утра. Оповещения можно откладывать на 1 день или 7 дней кнопками."
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="set_back_to_settings"))
-    await callback_query.message.edit_text(faq_text, reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=faq_text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data == "set_back_to_settings", state='*')
 async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FSMContext):
@@ -522,7 +533,8 @@ async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FS
            types.InlineKeyboardButton("⏱ Сроки замены", callback_data="set_ints"),
            types.InlineKeyboardButton("🗑 Удалить фильтр", callback_data="set_del"),
            get_back_btn("main_menu"))
-    await callback_query.message.edit_text("⚙️ <b>Настройки:</b>", reply_markup=kb, parse_mode='HTML')
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text="⚙️ <b>Настройки:</b>", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data == "main_menu", state='*')
 async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
@@ -542,7 +554,8 @@ async def process_snooze(callback_query: types.CallbackQuery):
     if uid in users_db:
         users_db[uid]["snooze_until"] = until_dt.strftime("%Y-%m-%d %H:%M:%S")
         await sync_gist("save")
-    await bot.edit_message_text(f"✅ Напомню через {days} дн.", callback_query.message.chat.id, callback_query.message.message_id)
+    await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
+                                text=f"✅ Напомню через {days} дн.", parse_mode=types.ParseMode.HTML)
 
 async def reminder_scheduler():
     while True:
