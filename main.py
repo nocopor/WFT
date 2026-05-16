@@ -79,7 +79,7 @@ CATALOGS = {
     },
     "flow": {
         "Аквафор": ["Фаворит", "Викинг 10SL", "Викинг 10BB"],
-        "Гейзер": ["Тайфун 10SL", "Тайфун 10BB", "Тайфун 20BB"],
+        "Гейзер": ["Тайхун 10SL", "Тайхун 10BB", "Тайхун 20BB"],
         "Барьер": ["Профи В1", "Профи В2", "Профи В3"],
         "Джилекс": ["Колба 10SL", "Колба 10BB", "Колба 20BB"],
         "Honeywell": ["FF06", "FK06", "F76S"],
@@ -136,7 +136,7 @@ def get_stages_count(f):
     """Корректно рассчитывает физическое количество ступеней для вывода в админке."""
     if f['category'] == 'osmos':
         stages = 0
-        if f['intervals'].get('pre', 0) > 0: stages += 3  # Считаем предфильтры за 3 ступени
+        if f['intervals'].get('pre', 0) > 0: stages += 3  
         if f['intervals'].get('mem', 0) > 0: stages += 1
         if f['intervals'].get('post', 0) > 0: stages += 1
         if f['intervals'].get('min', 0) > 0: stages += 1
@@ -244,7 +244,7 @@ async def cmd_settings(message: types.Message, state: FSMContext):
            types.InlineKeyboardButton("✏️ Названия картриджей", callback_data="set_names"),
            types.InlineKeyboardButton("⏱ Сроки замены", callback_data="set_ints"),
            types.InlineKeyboardButton("📜 Удалить запись истории", callback_data="set_del_hist"),
-           types.InlineKeyboardButton("🗑  Удалить фильтр", callback_data="set_del"),
+           types.InlineKeyboardButton("🗑 Удалить фильтр", callback_data="set_del"),
            get_back_btn("main_menu"))
     await message.answer("⚙️ <b>Настройки:</b>", reply_markup=kb)
 
@@ -291,7 +291,7 @@ async def process_model(callback_query: types.CallbackQuery, state: FSMContext):
         "history": [{"date": now_date, "item": "Картриджи новые"}], "created_at": now_date, "custom_names": {}
     })
     await sync_gist("save")
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    await callback_query.message.delete()
     await bot.send_message(uid, f"✅ <b>{brand} {model_name}</b> успешно добавлена!", reply_markup=get_main_menu())
 
 # --- ВЫБОР И ФИКСАЦИЯ ЗАМЕНЫ КАРТРИДЖЕЙ ---
@@ -319,7 +319,7 @@ async def sr_choice(callback_query: types.CallbackQuery):
         kb.add(types.InlineKeyboardButton(get_item_name(f, code), callback_data=f"opt_{code}_{idx}"))
     kb.add(get_back_btn("main_menu"))
     await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
-                                text="Что именно заменили?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
+                                text="What was replaced?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("opt_"), state='*')
 async def opt_choice_step(callback_query: types.CallbackQuery):
@@ -343,7 +343,7 @@ async def date_today(callback_query: types.CallbackQuery):
     users_db[uid]["filters"][idx]['history'] = [h for h in users_db[uid]["filters"][idx]['history'] if h['item'] != "Картриджи новые"]
     
     await sync_gist("save")
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    await callback_query.message.delete()
     await bot.send_message(uid, f"✅ Замена {name} сохранена!", reply_markup=get_main_menu())
 
 @dp.callback_query_handler(lambda c: c.data.startswith("dm_"), state='*')
@@ -353,7 +353,8 @@ async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext)
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
     
-    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    # ИСПРАВЛЕНО: Инлайн-меню скрывается полностью
+    try: await callback_query.message.delete()
     except: pass
     
     hint_text = "💡 <b>Подсказка:</b> Ручной ввод полезен, если вы фактически поменяли картридж несколько дней назад. Это сохранит точный календарь обслуживания."
@@ -397,7 +398,7 @@ async def ren_step_choice(callback_query: types.CallbackQuery):
     for code, val in f['intervals'].items():
         if val > 0: kb.add(types.InlineKeyboardButton(f"Изменить: {get_item_name(f, code)}", callback_data=f"edn_{idx}_{code}"))
     kb.add(get_back_btn("set_names"))
-    await callback_query.message.edit_text(f"What to rename in {f['model']}?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
+    await callback_query.message.edit_text(f"Что переименовать в {f['model']}?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("edn_"), state='*')
 async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext):
@@ -406,7 +407,7 @@ async def ren_input_start(callback_query: types.CallbackQuery, state: FSMContext
     await state.update_data(edit_idx=int(idx), edit_code=code)
     await FilterStates.waiting_for_cartridge_rename.set()
     
-    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    try: await callback_query.message.delete()
     except: pass
     
     hint_text = "💡 <b>Подсказка:</b> Вы можете присвоить ступеням любые понятные вам имена. Введённое название автоматически добавится к названию фильтра при поиске на Ozon/Wildberries."
@@ -451,7 +452,7 @@ async def ei_start(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(ei_code=code, ei_idx=int(idx))
     await FilterStates.waiting_for_interval_change.set()
     
-    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    try: await callback_query.message.delete()
     except: pass
     
     hint_text = "💡 <b>Подсказка:</b> Если вода жесткая или ржавая, стандартный интервал (например, 6 месяцев) рекомендуется уменьшить вручную, чтобы получать своевременные оповещения."
@@ -504,7 +505,7 @@ async def hdel_confirm(callback_query: types.CallbackQuery):
         if not f['history']:
             f['history'].append({"date": f['created_at'], "item": "Картриджи новые"})
         await sync_gist("save")
-        await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+        await callback_query.message.delete()
         await bot.send_message(uid, f"✅ Запись замен («{removed['date']} — {removed['item']}») успешно удалена!", reply_markup=get_main_menu())
 
 # --- ПОДМЕНЮ НАСТРОЕК: УДАЛЕНИЕ СИСТЕМЫ ---
@@ -523,7 +524,7 @@ async def del_confirm(callback_query: types.CallbackQuery):
     await callback_query.answer()
     idx = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
     name = users_db[uid]["filters"].pop(idx)['model']; await sync_gist("save")
-    await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    await callback_query.message.delete()
     await bot.send_message(uid, f"✅ Система {name} удалена.", reply_markup=get_main_menu())
 
 # --- МОДЕРНИЗАЦИЯ ПОИСКА НА МАРКЕТПЛЕЙСАХ ---
@@ -568,14 +569,14 @@ async def process_buy_item(callback_query: types.CallbackQuery):
     
     await callback_query.message.edit_text(f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
-# --- ИСПРАВЛЕННОЕ ПОДМЕНЮ НАСТРОЕК С FAQ (ЧИСТОЕ СКРЫТИЕ СТАРОГО ОКНА) ---
+# --- ИСПРАВЛЕННОЕ ПОЛНОЕ СКРЫТИЕ МЕНЮ ПРИ НАЖАТИИ НА FAQ ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
     await callback_query.answer() 
     
-    # ИСПРАВЛЕНО: Инлайн-меню настроек удаляется, предотвращая зависания Telegram-отрисовщика
-    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    # ИСПРАВЛЕНО: Инлайн-меню настроек удаляется из чата полностью, как при ручном вводе
+    try: await callback_query.message.delete()
     except: pass
     
     faq_text = (
@@ -593,16 +594,14 @@ async def set_faq_handler(callback_query: types.CallbackQuery):
         "🤖 <b>Авто-названия:</b> Для известных систем (Atoll, Аквафор Морион) бот автоматически подбирает заводские наименования коробок (№202, №203).\n\n"
         "🔔 <b>Напоминания:</b> Бот проверяет ресурс в районе 10:00 утра. Оповещения можно откладывать на 1 день или 7 дней кнопками."
     )
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("⬅️ Назад в настройки", callback_data="set_back_to_settings"))
     
-    # Отправляем справку чистым новым сообщением
-    await bot.send_message(chat_id=callback_query.from_user.id, text=faq_text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
+    # ИСПРАВЛЕНО: Справка прилетает чистым текстом БЕЗ инлайн-кнопок, полностью убирая меню
+    await bot.send_message(chat_id=callback_query.from_user.id, text=faq_text, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data == "set_back_to_settings", state='*')
 async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer()
-    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    try: await callback_query.message.delete()
     except: pass
     
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -618,7 +617,7 @@ async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FS
 async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer()
     await state.finish()
-    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    try: await callback_query.message.delete()
     except: pass
     await bot.send_message(callback_query.from_user.id, "Главное меню:", reply_markup=get_main_menu())
 
@@ -681,13 +680,12 @@ async def cmd_admin(message: types.Message, state: FSMContext):
     await state.finish()
     
     bot_info = await bot.get_me()
-    bot_id = str(bot_info.id)  # Получаем ID текущего запущенного бота для фильтрации
+    bot_id = str(bot_info.id)  
     
     res = f"👑 <b>АДМИН-ПАНЕЛЬ</b>\n\n"
     user_count = 0
     
     for uid, user_data in users_db.items():
-        # ИСПРАВЛЕНО: Полностью отсекаем из админки ID самого бота и пустые технические логи
         if uid == bot_id or not isinstance(user_data, dict) or "filters" not in user_data: continue
         
         username = user_data.get("username", "—")
@@ -700,13 +698,11 @@ async def cmd_admin(message: types.Message, state: FSMContext):
             res += " └ ❌ Фильтры не добавлены\n"
         else:
             for f in filters:
-                # ИСПРАВЛЕНО: Считаем ступени через get_stages_count(), теперь Atoll 575m корректно выводится как 5 ступеней
                 res += f" └ 🚰 {f['model']} ({get_stages_count(f)} ступ.)\n"
         res += "\n"
         
     res = f"👑 <b>АДМИН-ПАНЕЛЬ</b>\n👥 Живых юзеров в базе: {user_count}\n\n" + res
     
-    # ИСПРАВЛЕНО: Кнопка вместо текстовой команды рассылки
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("📢 Создать рассылку", callback_data="admin_start_broadcast"))
     
