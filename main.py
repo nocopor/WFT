@@ -319,7 +319,7 @@ async def sr_choice(callback_query: types.CallbackQuery):
         kb.add(types.InlineKeyboardButton(get_item_name(f, code), callback_data=f"opt_{code}_{idx}"))
     kb.add(get_back_btn("main_menu"))
     await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
-                                text="What was replaced?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
+                                text="Что именно заменили?", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("opt_"), state='*')
 async def opt_choice_step(callback_query: types.CallbackQuery):
@@ -353,7 +353,6 @@ async def date_man_start(callback_query: types.CallbackQuery, state: FSMContext)
     await state.update_data(dm_code=code, dm_idx=int(idx))
     await FilterStates.waiting_for_date.set()
     
-    # ИСПРАВЛЕНО: Инлайн-меню скрывается полностью
     try: await callback_query.message.delete()
     except: pass
     
@@ -569,13 +568,12 @@ async def process_buy_item(callback_query: types.CallbackQuery):
     
     await callback_query.message.edit_text(f"Сформированы ссылки для точного поиска:\n📦 <b>{search_query}</b>", reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
-# --- ИСПРАВЛЕННОЕ ПОЛНОЕ СКРЫТИЕ МЕНЮ ПРИ НАЖАТИИ НА FAQ ---
+# --- ИСПРАВЛЕННОЕ ПОДМЕНЮ НАСТРОЕК С FAQ (ПОЛНОЕ УДАЛЕНИЕ СТАРОГО ОКНА + КНОПКА НАЗАД) ---
 
 @dp.callback_query_handler(lambda c: c.data == "set_faq", state='*')
 async def set_faq_handler(callback_query: types.CallbackQuery):
     await callback_query.answer() 
     
-    # ИСПРАВЛЕНО: Инлайн-меню настроек удаляется из чата полностью, как при ручном вводе
     try: await callback_query.message.delete()
     except: pass
     
@@ -595,8 +593,10 @@ async def set_faq_handler(callback_query: types.CallbackQuery):
         "🔔 <b>Напоминания:</b> Бот проверяет ресурс в районе 10:00 утра. Оповещения можно откладывать на 1 день или 7 дней кнопками."
     )
     
-    # ИСПРАВЛЕНО: Справка прилетает чистым текстом БЕЗ инлайн-кнопок, полностью убирая меню
-    await bot.send_message(chat_id=callback_query.from_user.id, text=faq_text, parse_mode=types.ParseMode.HTML)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("⬅️ Назад в настройки", callback_data="set_back_to_settings"))
+    
+    await bot.send_message(chat_id=callback_query.from_user.id, text=faq_text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
 @dp.callback_query_handler(lambda c: c.data == "set_back_to_settings", state='*')
 async def set_back_to_settings_cb(callback_query: types.CallbackQuery, state: FSMContext):
@@ -621,58 +621,87 @@ async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMConte
     except: pass
     await bot.send_message(callback_query.from_user.id, "Главное меню:", reply_markup=get_main_menu())
 
-# --- СИСТЕМА УМНЫХ ОПОВЕЩЕНИЙ И СНА КНОПОК ---
+# --- СИСТЕМА УМНЫХ ОПОВЕЩЕНИЙ И СНА КНОПОК (ПОЛНОЕ ИСПРАВЛЕНИЕ) ---
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sn_"), state='*')
 async def process_snooze(callback_query: types.CallbackQuery):
     await callback_query.answer()
     days = int(callback_query.data.split('_')[1]); uid = str(callback_query.from_user.id)
-    until_dt = datetime.now() + timedelta(days=days)
+    
+    # ИСПРАВЛЕНО: Синхронизируем ручной снуз с Московским временем (UTC+3)
+    until_dt = datetime.utcnow() + timedelta(hours=3) + timedelta(days=days)
     if uid in users_db:
         users_db[uid]["snooze_until"] = until_dt.strftime("%Y-%m-%d %H:%M:%S")
+        # Очищаем дату отправки, чтобы через X дней бот проверил систему заново
+        users_db[uid]["last_reminder_date"] = ""
         await sync_gist("save")
     await bot.edit_message_text(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id,
                                 text=f"✅ Напомню через {days} дн.", parse_mode=types.ParseMode.HTML)
 
 async def reminder_scheduler():
     while True:
-        now = datetime.now()
-        if now.hour == 10:  
-            for uid, user_data in users_db.items():
-                if not isinstance(user_data, dict): continue
-                snooze_until_str = user_data.get("snooze_until")
-                if snooze_until_str:
-                    try:
-                        if now < datetime.strptime(snooze_until_str, "%Y-%m-%d %H:%M:%S"): continue
-                    except: pass
-                alert_msg = ""
-                for f in user_data.get("filters", []):
-                    for code, interval in f['intervals'].items():
-                        if interval == 0: continue
-                        name = get_item_name(f, code)
+        try:
+            # ИСПРАВЛЕНО: Точный перевод времени сервера в Московский часовой пояс
+            now = datetime.utcnow() + timedelta(hours=3)
+            
+            # Проверка начинается строго после 10:00 утра по Москве
+            if now.hour >= 10:
+                today_str = now.strftime("%d.%m.%Y")
+                
+                for uid, user_data in users_db.items():
+                    if not isinstance(user_data, dict) or "filters" not in user_data: continue
+                    
+                    # ИСПРАВЛЕНО: Если сегодня юзеру уже напоминали (или его фильтры в норме) — пропускаем
+                    if user_data.get("last_reminder_date") == today_str: continue
+                    
+                    # Проверяем пользовательский снуз (кнопки "Завтра" / "Через неделю")
+                    snooze_until_str = user_data.get("snooze_until")
+                    if snooze_until_str:
+                        try:
+                            snooze_dt = datetime.strptime(snooze_until_str, "%Y-%m-%d %H:%M:%S")
+                            if now < snooze_dt: continue
+                        except: pass
+                    
+                    alert_msg = ""
+                    for f in user_data.get("filters", []):
+                        for code, interval in f['intervals'].items():
+                            if interval == 0: continue
+                            name = get_item_name(f, code)
+                            
+                            last_date_str = f['created_at']
+                            for h in reversed(f['history']):
+                                if h.get('code') == code or h['item'] == name or h['item'] == AUTO_NAMES.get(f['model'], {}).get(code) or h['item'] == FILTER_CONFIGS[f['category']].get(code, {}).get('name'):
+                                    if h['date'] != "Картриджи новые":
+                                        last_date_str = h['date']
+                                        break
+                                        
+                            last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
+                            days_left = int(interval * 30.4 - (now - last_date).days)
+                            if days_left <= 7: 
+                                alert_msg += f"⚠️ <b>{f['model']}</b>: {name} (осталось {days_left} дн.)\n"
+                                
+                    if alert_msg:
+                        kb = types.InlineKeyboardMarkup(row_width=2)
+                        kb.add(types.InlineKeyboardButton("🕒 Завтра", callback_data="sn_1"),
+                               types.InlineKeyboardButton("🗓 Через неделю", callback_data="sn_7"))
+                        try:
+                            await bot.send_message(uid, f"🔔 <b>ПОРА ОБСЛУЖИТЬ ФИЛЬТР!</b>\n\n{alert_msg}", reply_markup=kb)
+                            # Запоминаем день отправки
+                            users_db[uid]["last_reminder_date"] = today_str
+                            await sync_gist("save")
+                        except Exception as e:
+                            logging.error(f"Не удалось отправить уведомление для {uid}: {e}")
+                    else:
+                        # Если все фильтры в норме, всё равно закрываем день, чтобы не гонять базу по кругу
+                        users_db[uid]["last_reminder_date"] = today_str
                         
-                        last_date_str = f['created_at']
-                        for h in reversed(f['history']):
-                            if h.get('code') == code or h['item'] == name or h['item'] == AUTO_NAMES.get(f['model'], {}).get(code) or h['item'] == FILTER_CONFIGS[f['category']].get(code, {}).get('name'):
-                                if h['date'] != "Картриджи новые":
-                                    last_date_str = h['date']
-                                    break
-                                    
-                        last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
-                        if int(interval * 30.4 - (now - last_date).days) <= 7: 
-                            alert_msg += f"⚠️ <b>{f['model']}</b>: {name}\n"
-                if alert_msg:
-                    kb = types.InlineKeyboardMarkup(row_width=2)
-                    kb.add(types.InlineKeyboardButton("🕒 Завтра", callback_data="sn_1"),
-                           types.InlineKeyboardButton("🗓 Через неделю", callback_data="sn_7"))
-                    try:
-                        await bot.send_message(uid, f"🔔 <b>ПОРА ОБСЛУЖИТЬ ФИЛЬТР!</b>\n\n{alert_msg}", reply_markup=kb)
-                        users_db[uid]["snooze_until"] = (now + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-                        await sync_gist("save")
-                    except: pass
-        await asyncio.sleep(3600)
+        except Exception as global_err:
+            logging.error(f"Ошибка в работе планировщика: {global_err}")
+            
+        # ИСПРАВЛЕНО: Интервал опроса базы снижен до 60 секунд для исключения пропусков при рестарте
+        await asyncio.sleep(60)
 
-# --- ИСПРАВЛЕННОЕ ПОДРОБНОЕ МЕНЮ АДМИНИСТРАТОРА С КНОПКОЙ РАССЫЛКИ ---
+# --- ПОДРОБНОЕ МЕНЮ АДМИНИСТРАТОРА С КНОПКОЙ РАССЫЛКИ ---
 
 @dp.message_handler(commands=['admin'], state='*')
 async def cmd_admin(message: types.Message, state: FSMContext):
